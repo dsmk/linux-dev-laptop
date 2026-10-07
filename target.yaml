@@ -1,0 +1,82 @@
+---
+- name: Configure Fedora 44 developer laptop
+  hosts: localhost
+  connection: local
+  become: true
+
+  collections:
+    - community.general
+
+  vars:
+    developer_user: "{{ lookup('env', 'SUDO_USER') | default(lookup('env', 'USER'), true) }}"
+    developer_home: "{{ lookup('pipe', 'getent passwd ' ~ developer_user ~ ' | cut -d: -f6') }}"
+
+    create_win11_vm: true
+    win11_vm_name: win11-dev
+    win11_iso_path: /var/lib/libvirt/boot/Win11.iso
+    win11_disk_path: "/var/lib/libvirt/images/{{ win11_vm_name }}.qcow2"
+    win11_disk_size_gb: 100
+    win11_memory_mb: 8192
+    win11_vcpus: 4
+
+    virtio_win_iso_url: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+    virtio_win_iso_path: /var/lib/libvirt/boot/virtio-win.iso
+
+    flatpak_apps:
+      - com.slack.Slack
+      - com.discordapp.Discord
+      - us.zoom.Zoom
+      - md.obsidian.Obsidian
+
+    fedora_packages:
+      - dnf-plugins-core
+      - ca-certificates
+      - curl
+      - wget
+      - git
+      - gnupg2
+      - flatpak
+      - nodejs
+      - npm
+      - golang
+      - podman
+      - podman-compose
+      - podman-docker
+      - toolbox
+      - virt-manager
+      - virt-install
+      - virt-viewer
+      - libvirt
+      - libvirt-daemon
+      - libvirt-daemon-config-network
+      - libvirt-daemon-kvm
+      - qemu-kvm
+      - edk2-ovmf
+      - swtpm
+      - swtpm-tools
+      - osinfo-db
+      - libosinfo
+      - spice-vdagent
+      - bridge-utils
+      - onedrive
+
+    rpm_packages:
+      - code
+      - google-chrome-stable
+      - 1password
+      - 1password-cli
+
+  pre_tasks:
+    - name: Show target user
+      ansible.builtin.debug:
+        msg: "Configuring laptop for user {{ developer_user }} with home {{ developer_home }}"
+
+    - name: Ensure Fedora host
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Fedora"
+        fail_msg: "This playbook is intended for Fedora."
+
+  tasks:
+    - name:
+      ansible.builtin.import_tasks: chrome.yaml

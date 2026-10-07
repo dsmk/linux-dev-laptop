@@ -1,0 +1,463 @@
+---
+- name: Configure Fedora 44 developer laptop
+  hosts: localhost
+  connection: local
+  become: true
+
+  collections:
+    - community.general
+
+  vars:
+    developer_user: "{{ lookup('env', 'SUDO_USER') | default(lookup('env', 'USER'), true) }}"
+    developer_home: "{{ lookup('pipe', 'getent passwd ' ~ developer_user ~ ' | cut -d: -f6') }}"
+
+    create_win11_vm: true
+    win11_vm_name: win11-dev
+    win11_iso_path: /var/lib/libvirt/boot/Win11.iso
+    win11_disk_path: "/var/lib/libvirt/images/{{ win11_vm_name }}.qcow2"
+    win11_disk_size_gb: 100
+    win11_memory_mb: 8192
+    win11_vcpus: 4
+
+    virtio_win_iso_url: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+    virtio_win_iso_path: /var/lib/libvirt/boot/virtio-win.iso
+
+    flatpak_apps:
+      - com.slack.Slack
+      - com.discordapp.Discord
+      - us.zoom.Zoom
+      - md.obsidian.Obsidian
+
+    fedora_packages:
+      - dnf-plugins-core
+      - ca-certificates
+      - curl
+      - wget
+      - git
+      - gnupg2
+      - flatpak
+      - nodejs
+      - npm
+      - golang
+      - podman
+      - podman-compose
+      - podman-docker
+      - toolbox
+      - virt-manager
+      - virt-install
+      - virt-viewer
+      - libvirt
+      - libvirt-daemon
+      - libvirt-daemon-config-network
+      - libvirt-daemon-kvm
+      - qemu-kvm
+      - edk2-ovmf
+      - swtpm
+      - swtpm-tools
+      - osinfo-db
+      - libosinfo
+      - spice-vdagent
+      - bridge-utils
+      - onedrive
+
+    rpm_packages:
+      - code
+      - google-chrome-stable
+      - 1password
+      - 1password-cli
+
+  pre_tasks:
+    - name: Show target user
+      ansible.builtin.debug:
+        msg: "Configuring laptop for user {{ developer_user }} with home {{ developer_home }}"
+
+    - name: Ensure Fedora host
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Fedora"
+        fail_msg: "This playbook is intended for Fedora."
+
+  tasks:
+    ###########################################################################
+    # Repositories
+    ###########################################################################
+
+    - name: Import Microsoft RPM GPG key
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://packages.microsoft.com/keys/microsoft.asc
+
+    - name: Configure VS Code repository
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/vscode.repo
+        mode: "0644"
+        content: |
+          [code]
+          name=Visual Studio Code
+          baseurl=https://packages.microsoft.com/yumrepos/vscode
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+
+    - name: Import Google Linux RPM GPG key
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://dl.google.com/linux/linux_signing_key.pub
+
+    - name: Configure Google Chrome repository
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/google-chrome.repo
+        mode: "0644"
+        content: |
+          [google-chrome]
+          name=google-chrome
+          baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://dl.google.com/linux/linux_signing_key.pub
+
+    - name: Import 1Password RPM GPG key
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://downloads.1password.com/linux/keys/1password.asc
+
+    - name: Configure 1Password repository
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/1password.repo
+        mode: "0644"
+        content: |
+          [1password]
+          name=1Password Stable Channel
+          baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=https://downloads.1password.com/linux/keys/1password.asc
+
+    ###########################################################################
+    # Base packages
+    ###########################################################################
+
+    - name: Install Fedora packages
+      ansible.builtin.dnf:
+        name: "{{ fedora_packages }}"
+        state: present
+        update_cache: true
+        allowerasing: true
+
+    - name: Install RPM repo packages
+      ansible.builtin.dnf:
+        name: "{{ rpm_packages }}"
+        state: present
+        update_cache: true
+        allowerasing: true
+
+    ###########################################################################
+    # Flatpak applications
+    ###########################################################################
+
+    - name: Enable Flathub remote
+      community.general.flatpak_remote:
+        name: flathub
+        state: present
+        method: system
+        flatpakrepo_url: https://flathub.org/repo/flathub.flatpakrepo
+
+    - name: Install Flatpak desktop applications
+      community.general.flatpak:
+        name: "{{ item }}"
+        state: present
+        method: system
+      loop: "{{ flatpak_apps }}"
+
+    ###########################################################################
+    # Podman
+    ###########################################################################
+
+    - name: Enable user lingering for Podman/systemd user services
+      ansible.builtin.command:
+        cmd: "loginctl enable-linger {{ developer_user }}"
+      changed_when: false
+
+    - name: Ensure podman socket is enabled for user
+      become: true
+      become_user: "{{ developer_user }}"
+      ansible.builtin.systemd:
+        name: podman.socket
+        scope: user
+        enabled: true
+        state: started
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ lookup('pipe', 'id -u ' ~ developer_user) }}"
+
+    ###########################################################################
+    # Claude Code CLI
+    ###########################################################################
+
+    - name: Install Claude Code CLI globally
+      ansible.builtin.npm:
+        name: "@anthropic-ai/claude-code"
+        global: true
+        state: present
+
+    ###########################################################################
+    # d2 and klog via Go
+    ###########################################################################
+
+    - name: Ensure user local bin exists
+      ansible.builtin.file:
+        path: "{{ developer_home }}/.local/bin"
+        state: directory
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0755"
+
+    - name: Install d2 via Go
+      become: true
+      become_user: "{{ developer_user }}"
+      ansible.builtin.command:
+        cmd: go install oss.terrastruct.com/d2@latest
+      environment:
+        GOBIN: "{{ developer_home }}/.local/bin"
+        HOME: "{{ developer_home }}"
+      changed_when: true
+
+    - name: Install klog via Go
+      become: true
+      become_user: "{{ developer_user }}"
+      ansible.builtin.command:
+        cmd: go install github.com/jotaen/klog@latest
+      environment:
+        GOBIN: "{{ developer_home }}/.local/bin"
+        HOME: "{{ developer_home }}"
+      changed_when: true
+
+    ###########################################################################
+    # Desktop launchers for web apps
+    ###########################################################################
+
+    - name: Ensure user application launcher directory exists
+      ansible.builtin.file:
+        path: "{{ developer_home }}/.local/share/applications"
+        state: directory
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0755"
+
+    - name: Create Claude desktop launcher
+      ansible.builtin.copy:
+        dest: "{{ developer_home }}/.local/share/applications/claude.desktop"
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Name=Claude
+          Comment=Claude AI
+          Exec=/usr/bin/google-chrome-stable --app=https://claude.ai/
+          Terminal=false
+          Type=Application
+          Categories=Development;Office;
+          StartupNotify=true
+
+    - name: Create Microsoft Teams desktop launcher
+      ansible.builtin.copy:
+        dest: "{{ developer_home }}/.local/share/applications/microsoft-teams.desktop"
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Name=Microsoft Teams
+          Comment=Microsoft Teams Web App
+          Exec=/usr/bin/google-chrome-stable --app=https://teams.microsoft.com/v2/
+          Terminal=false
+          Type=Application
+          Categories=Network;Office;
+          StartupNotify=true
+
+    - name: Create Microsoft 365 desktop launcher
+      ansible.builtin.copy:
+        dest: "{{ developer_home }}/.local/share/applications/microsoft-365.desktop"
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0644"
+        content: |
+          [Desktop Entry]
+          Name=Microsoft 365
+          Comment=Microsoft 365 Web App
+          Exec=/usr/bin/google-chrome-stable --app=https://www.office.com/
+          Terminal=false
+          Type=Application
+          Categories=Office;
+          StartupNotify=true
+
+    ###########################################################################
+    # OneDrive
+    ###########################################################################
+
+    - name: Ensure OneDrive config directory exists
+      ansible.builtin.file:
+        path: "{{ developer_home }}/.config/onedrive"
+        state: directory
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0700"
+
+    - name: Create OneDrive sync directory
+      ansible.builtin.file:
+        path: "{{ developer_home }}/OneDrive"
+        state: directory
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0755"
+
+    - name: Configure OneDrive client
+      ansible.builtin.copy:
+        dest: "{{ developer_home }}/.config/onedrive/config"
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0600"
+        content: |
+          sync_dir = "{{ developer_home }}/OneDrive"
+          skip_file = "~*|.~*|*.tmp"
+          monitor_interval = "300"
+          operation_timeout = "3600"
+          skip_dotfiles = "false"
+          check_nosync = "true"
+
+    - name: Show OneDrive post-install instructions
+      ansible.builtin.debug:
+        msg:
+          - "OneDrive is installed, but authentication must be completed manually."
+          - "Run as {{ developer_user }}: onedrive"
+          - "After login, enable sync with:"
+          - "systemctl --user enable --now onedrive"
+
+    ###########################################################################
+    # libvirt / virt-manager
+    ###########################################################################
+
+    - name: Add developer user to virtualization groups
+      ansible.builtin.user:
+        name: "{{ developer_user }}"
+        groups:
+          - libvirt
+          - kvm
+        append: true
+
+    - name: Enable libvirt services or sockets
+      ansible.builtin.shell: |
+        set -o pipefail
+        if systemctl list-unit-files | grep -q '^libvirtd.service'; then
+          systemctl enable --now libvirtd.service
+        else
+          systemctl enable --now virtqemud.socket virtstoraged.socket virtnetworkd.socket virtlogd.socket
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure default libvirt network is defined
+      ansible.builtin.shell: |
+        if ! virsh net-info default >/dev/null 2>&1; then
+          virsh net-define /usr/share/libvirt/networks/default.xml
+        fi
+      changed_when: false
+
+    - name: Ensure default libvirt network is started
+      ansible.builtin.shell: |
+        if ! virsh net-info default | grep -q "Active:.*yes"; then
+          virsh net-start default
+        fi
+      changed_when: false
+
+    - name: Ensure default libvirt network autostarts
+      ansible.builtin.command:
+        cmd: virsh net-autostart default
+      changed_when: false
+
+    ###########################################################################
+    # Windows 11 VM
+    ###########################################################################
+
+    - name: Ensure libvirt boot directory exists
+      ansible.builtin.file:
+        path: /var/lib/libvirt/boot
+        state: directory
+        mode: "0755"
+
+    - name: Download virtio-win driver ISO
+      ansible.builtin.get_url:
+        url: "{{ virtio_win_iso_url }}"
+        dest: "{{ virtio_win_iso_path }}"
+        mode: "0644"
+
+    - name: Check for Windows 11 ISO
+      ansible.builtin.stat:
+        path: "{{ win11_iso_path }}"
+      register: win11_iso_stat
+
+    - name: Check whether Windows 11 VM already exists
+      ansible.builtin.command:
+        cmd: "virsh dominfo {{ win11_vm_name }}"
+      register: win11_vm_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check whether libosinfo knows win11
+      ansible.builtin.shell: |
+        osinfo-query os | awk '{print $1}' | grep -qx win11
+      register: win11_osinfo_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set Windows OS variant
+      ansible.builtin.set_fact:
+        win_os_variant: "{{ 'win11' if win11_osinfo_check.rc == 0 else 'win10' }}"
+
+    - name: Create Windows 11 VM if ISO exists
+      ansible.builtin.command: >-
+        virt-install
+        --connect qemu:///system
+        --name {{ win11_vm_name }}
+        --memory {{ win11_memory_mb }}
+        --vcpus {{ win11_vcpus }}
+        --cpu host-passthrough
+        --machine q35
+        --os-variant {{ win_os_variant }}
+        --boot uefi,loader.secure=yes
+        --features smm.state=on
+        --disk path={{ win11_disk_path }},size={{ win11_disk_size_gb }},bus=virtio,format=qcow2
+        --cdrom {{ win11_iso_path }}
+        --disk path={{ virtio_win_iso_path }},device=cdrom
+        --network network=default,model=virtio
+        --graphics spice,listen=none
+        --video virtio
+        --channel spicevmc
+        --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb
+        --noautoconsole
+        --check all=off
+      when:
+        - create_win11_vm | bool
+        - win11_iso_stat.stat.exists
+        - win11_vm_check.rc != 0
+
+    - name: Explain skipped Windows 11 VM creation
+      ansible.builtin.debug:
+        msg:
+          - "Windows 11 VM was not created because {{ win11_iso_path }} does not exist."
+          - "Download the Windows 11 ISO manually and place it at {{ win11_iso_path }}."
+          - "Then rerun this playbook."
+      when:
+        - create_win11_vm | bool
+        - not win11_iso_stat.stat.exists
+
+    ###########################################################################
+    # Validation
+    ###########################################################################
+
+    - name: Run validation suite
+      ansible.builtin.include_tasks: validate.yml
+      tags:
+        - validate
