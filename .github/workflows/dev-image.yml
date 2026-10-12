@@ -59,7 +59,7 @@ jobs:
           podman run --rm \
             --volume "$PWD/tests:/tests:ro" \
             "$IMAGE:${GITHUB_SHA}" \
-            bash /tests/smode-dev-container.sh
+            bash /tests/smoke-dev-container.sh
 
       - name: Authenticate to GHCR
         if: github.event_name != 'pull_request'
