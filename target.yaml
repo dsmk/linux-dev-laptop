@@ -78,5 +78,17 @@
         fail_msg: "This playbook is intended for Fedora."
 
   tasks:
-    - name:
-      ansible.builtin.import_tasks: chrome.yaml
+    - name: Basic fedora packages 
+      ansible.builtin.import_tasks: fedora-rpms.yaml
+
+    - name: Flatpak apps
+      ansible.builtin.import_tasks: flatpak.yaml
+
+    # - name: Set up AI systems (Claude, etc)
+    #   ansible.builtin.import_tasks: ai.yaml
+
+    - name: Set up go based apps
+      tags:
+        - go
+      ansible.builtin.import_tasks: go-apps.yaml
+

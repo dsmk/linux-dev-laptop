@@ -1,0 +1,86 @@
+---
+# Repositories
+###########################################################################
+
+    - name: Import Microsoft RPM GPG key
+      tags:
+        - repos
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://packages.microsoft.com/keys/microsoft.asc
+
+    - name: Configure VS Code repository
+      tags:
+        - repos
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/vscode.repo
+        mode: "0644"
+        content: |
+          [code]
+          name=Visual Studio Code
+          baseurl=https://packages.microsoft.com/yumrepos/vscode
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+
+    - name: Import Google Linux RPM GPG key
+      tags:
+        - repos
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://dl.google.com/linux/linux_signing_key.pub
+
+    - name: Configure Google Chrome repository
+      tags:
+        - repos
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/google-chrome.repo
+        mode: "0644"
+        content: |
+          [google-chrome]
+          name=google-chrome
+          baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64
+          enabled=1
+          gpgcheck=1
+          gpgkey=https://dl.google.com/linux/linux_signing_key.pub
+
+    - name: Import 1Password RPM GPG key
+      tags:
+        - repos
+      ansible.builtin.rpm_key:
+        state: present
+        key: https://downloads.1password.com/linux/keys/1password.asc
+
+    - name: Configure 1Password repository
+      tags:
+        - repos
+      ansible.builtin.copy:
+        dest: /etc/yum.repos.d/1password.repo
+        mode: "0644"
+        content: |
+          [1password]
+          name=1Password Stable Channel
+          baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
+          enabled=1
+          gpgcheck=1
+          repo_gpgcheck=1
+          gpgkey=https://downloads.1password.com/linux/keys/1password.asc
+
+    ###########################################################################
+    # Base packages
+    ###########################################################################
+
+    - name: Install Fedora packages
+      ansible.builtin.dnf:
+        name: "{{ fedora_packages }}"
+        state: present
+        update_cache: true
+        allowerasing: true
+
+    - name: Install RPM repo packages
+      ansible.builtin.dnf:
+        name: "{{ rpm_packages }}"
+        state: present
+        update_cache: true
+        allowerasing: true
+

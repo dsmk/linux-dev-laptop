@@ -1,0 +1,33 @@
+---
+    ###########################################################################
+    # d2 and klog via Go
+    ###########################################################################
+
+    - name: Ensure user local bin exists
+      ansible.builtin.file:
+        path: "{{ developer_home }}/.local/bin"
+        state: directory
+        owner: "{{ developer_user }}"
+        group: "{{ developer_user }}"
+        mode: "0755"
+
+    - name: Install d2 via Go
+      become: true
+      become_user: "{{ developer_user }}"
+      ansible.builtin.command:
+        cmd: go install oss.terrastruct.com/d2@latest
+      environment:
+        GOBIN: "{{ developer_home }}/.local/bin"
+        HOME: "{{ developer_home }}"
+      changed_when: true
+
+    - name: Install klog via Go
+      become: true
+      become_user: "{{ developer_user }}"
+      ansible.builtin.command:
+        cmd: go install github.com/jotaen/klog@latest
+      environment:
+        GOBIN: "{{ developer_home }}/.local/bin"
+        HOME: "{{ developer_home }}"
+      changed_when: true
+

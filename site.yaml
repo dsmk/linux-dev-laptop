@@ -222,15 +222,15 @@
         HOME: "{{ developer_home }}"
       changed_when: true
 
-    - name: Install klog via Go
-      become: true
-      become_user: "{{ developer_user }}"
-      ansible.builtin.command:
-        cmd: go install github.com/jotaen/klog@latest
-      environment:
-        GOBIN: "{{ developer_home }}/.local/bin"
-        HOME: "{{ developer_home }}"
-      changed_when: true
+    # - name: Install klog via Go
+    #   become: true
+    #   become_user: "{{ developer_user }}"
+    #   ansible.builtin.command:
+    #     cmd: go install github.com/jotaen/klog@latest
+    #   environment:
+    #     GOBIN: "{{ developer_home }}/.local/bin"
+    #     HOME: "{{ developer_home }}"
+    #   changed_when: true
 
     ###########################################################################
     # Desktop launchers for web apps
