@@ -1,0 +1,38 @@
+---
+developer_user: dsmk
+developer_container: dev
+
+# Set this to the published image digest for repeatable deployments.
+developer_image: ghcr.io/dsmk/developer-platform-dev:main
+
+enable_personal: false
+enable_pihole: false
+enable_winapps: false
+enable_bluebubbles_client: false
+
+flatpak_apps:
+  - com.discordapp.Discord
+  - com.google.Chrome
+  - com.onepassword.OnePassword
+  - com.slack.Slack
+  - md.obsidian.Obsidian
+  - us.zoom.Zoom
+
+# Confirm the application's current Flathub ID before enabling.
+bluebubbles_flatpak_id: ""
+
+# Pin WinApps to a reviewed commit rather than following main.
+winapps_repository: https://github.com/winapps-org/winapps.git
+winapps_revision: ""
+
+winapps_windows_address: ""
+winapps_windows_username: ""
+winapps_windows_password: ""
+
+# Host package names should be verified against the active Fedora release.
+host_packages:
+  - freerdp
+  - NetworkManager-openconnect
+  - NetworkManager-openconnect-gnome
+
+# Keep credentials in Vault, not in this file.

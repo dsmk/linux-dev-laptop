@@ -1,0 +1,67 @@
+---
+- name: Install BlueBubbles server on macOS
+  hosts: macos
+  gather_facts: true
+
+  vars:
+    # Supply through inventory or a release lock file.
+    bluebubbles_archive_url: ""
+    bluebubbles_archive_sha256: ""
+
+  tasks:
+    - name: Require macOS and a pinned application archive
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system == "Darwin"
+          - bluebubbles_archive_url | length > 0
+          - bluebubbles_archive_sha256 | length == 64
+
+    - name: Create download directory
+      ansible.builtin.file:
+        path: "{{ ansible_facts.user_dir }}/.cache/bluebubbles"
+        state: directory
+        mode: "0700"
+
+    - name: Download pinned BlueBubbles ZIP
+      ansible.builtin.get_url:
+        url: "{{ bluebubbles_archive_url }}"
+        dest: "{{ ansible_facts.user_dir }}/.cache/bluebubbles/server.zip"
+        checksum: "sha256:{{ bluebubbles_archive_sha256 }}"
+        mode: "0600"
+
+    - name: Inspect current application
+      ansible.builtin.stat:
+        path: /Applications/BlueBubbles.app
+      register: bluebubbles_app
+
+    # Assumes this particular release ZIP contains BlueBubbles.app
+    # at its archive root. Verify the release layout before deployment.
+    - name: Extract BlueBubbles application
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ditto
+          - -x
+          - -k
+          - "{{ ansible_facts.user_dir }}/.cache/bluebubbles/server.zip"
+          - /Applications
+      when: not bluebubbles_app.stat.exists
+
+    - name: Verify application signing
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/codesign
+          - --verify
+          - --deep
+          - --strict
+          - /Applications/BlueBubbles.app
+      changed_when: false
+
+    - name: Explain interactive enrollment
+      ansible.builtin.debug:
+        msg:
+          - "Open Messages and sign in with the intended Apple account."
+          - "Open BlueBubbles and complete server setup."
+          - "Approve required macOS permissions through System Settings."
+          - "Configure launch at login through the supported app settings."
+          - "Connect the Linux client using the configured server endpoint."

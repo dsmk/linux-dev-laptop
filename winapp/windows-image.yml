@@ -1,0 +1,74 @@
+name: Build private Windows image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-image-factory
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    environment: windows-factory
+    runs-on: [self-hosted, linux, x64, windows-factory]
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout private Windows builder
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.WINDOWS_FACTORY_REPOSITORY }}
+          ref: ${{ vars.WINDOWS_FACTORY_REVISION }}
+          token: ${{ secrets.WINDOWS_FACTORY_READ_TOKEN }}
+          path: private-windows-builder
+          persist-credentials: false
+
+      - name: Check factory prerequisites
+        run: |
+          test -c /dev/kvm
+          test -r /srv/windows-media/Win11.iso
+          command -v packer
+          command -v qemu-img
+          command -v swtpm
+
+      - name: Validate and build
+        working-directory: private-windows-builder
+        env:
+          PKR_VAR_windows_iso_path: /srv/windows-media/Win11.iso
+          PKR_VAR_windows_iso_checksum: ${{ vars.WINDOWS_ISO_SHA256 }}
+        run: |
+          set -euo pipefail
+          packer init .
+          packer validate .
+          packer build .
+
+      - name: Verify output artifacts
+        working-directory: private-windows-builder
+        run: |
+          set -euo pipefail
+          test -s output/windows11.qcow2
+          test -s output/validation.json
+
+          qemu-img check output/windows11.qcow2
+          qemu-img info --output=json \
+            output/windows11.qcow2 > output/disk-info.json
+
+          jq -e '.passed == true' output/validation.json
+          sha256sum output/windows11.qcow2 \
+            > output/windows11.qcow2.sha256
+
+      - name: Upload validation reports only
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-validation
+          path: |
+            private-windows-builder/output/validation.json
+            private-windows-builder/output/disk-info.json
+            private-windows-builder/output/windows11.qcow2.sha256
+          retention-days: 7

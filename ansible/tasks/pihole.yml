@@ -1,0 +1,51 @@
+---
+- name: Require a pinned Pi-hole image
+  ansible.builtin.assert:
+    that:
+      - pihole_image is defined
+      - "'@sha256:' in pihole_image"
+
+- name: Create Pi-hole directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - /etc/containers/systemd
+    - /var/lib/pihole
+
+- name: Install Pi-hole Quadlet
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/containers/systemd/pihole.container
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Local Pi-hole
+      Wants=network-online.target
+      After=network-online.target
+
+      [Container]
+      Image={{ pihole_image }}
+      ContainerName=pihole
+      PublishPort=127.0.0.1:53:53/tcp
+      PublishPort=127.0.0.1:53:53/udp
+      PublishPort=127.0.0.1:8080:80/tcp
+      Volume=/var/lib/pihole:/etc/pihole:Z
+      Environment=TZ=America/New_York
+      Environment=FTLCONF_dns_listeningMode=ALL
+      Environment=FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1
+
+      [Service]
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start Pi-hole
+  become: true
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: pihole.service
+    state: started

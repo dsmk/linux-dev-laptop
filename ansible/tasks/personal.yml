@@ -1,0 +1,22 @@
+---
+- name: Install personal desktop applications
+  community.general.flatpak:
+    name: "{{ item }}"
+    remote: flathub
+    method: user
+    state: present
+  loop:
+    - com.valvesoftware.Steam
+    - org.libretro.RetroArch
+
+- name: Create personal media directories
+  ansible.builtin.file:
+    path: "{{ developer_home }}/{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - Games
+    - Emulation
+    - Emulation/Amiga
+    - Emulation/NeXT
+    - Emulation/Firmware

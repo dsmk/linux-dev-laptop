@@ -1,0 +1,195 @@
+---
+- name: Configure Silverblue developer laptop
+  hosts: all
+  gather_facts: true
+
+  vars_files:
+    - group_vars/all.yml
+
+  pre_tasks:
+    - name: Check for an OSTree host
+      ansible.builtin.stat:
+        path: /run/ostree-booted
+      register: ostree_host
+
+    - name: Require Fedora Silverblue-style host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Fedora"
+          - ostree_host.stat.exists
+        fail_msg: "Run this on the Silverblue host, not inside toolbx."
+
+    - name: Look up developer account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ developer_user }}"
+
+    - name: Record developer home and UID
+      ansible.builtin.set_fact:
+        developer_home: "{{ getent_passwd[developer_user][4] }}"
+        developer_uid: "{{ getent_passwd[developer_user][1] }}"
+
+    - name: Read OSTree deployment status
+      ansible.builtin.command: rpm-ostree status --json
+      register: ostree_status
+      changed_when: false
+
+    - name: Identify booted deployment
+      ansible.builtin.set_fact:
+        booted_deployment: >-
+          {{
+            (ostree_status.stdout | from_json).deployments
+            | selectattr('booted', 'equalto', true)
+            | first
+          }}
+
+    # - name: Stage additional host packages
+    #   become: true
+    #   ansible.builtin.command:
+    #     argv: "{{ ['rpm-ostree', 'install', '--idempotent'] + host_packages }}"
+    #   register: layering
+    #   changed_when: "'No change' not in layering.stdout"
+
+    # - name: Check active host packages
+    #   ansible.builtin.command:
+    #     argv: "{{ ['rpm', '-q'] + host_packages }}"
+    #   register: active_packages
+    #   failed_when: false
+    #   changed_when: false
+
+    # - name: Stop at the reboot boundary
+    #   ansible.builtin.fail:
+    #     msg: >-
+    #       Required packages are not available in the booted deployment.
+    #       Reboot the laptop and rerun this playbook.
+    #   when: active_packages.rc != 0
+
+  tasks:
+    - name: Configure the developer environment
+      become: true
+      become_user: "{{ developer_user }}"
+      environment:
+        HOME: "{{ developer_home }}"
+        XDG_RUNTIME_DIR: "/run/user/{{ developer_uid }}"
+      block:
+        - name: Create development directories
+          ansible.builtin.file:
+            path: "{{ developer_home }}/{{ item }}"
+            state: directory
+            mode: "0750"
+          loop:
+            - Projects
+            - Projects/personal
+            - Projects/work
+            - Documents
+            - OneDrive
+            - GoogleDrive
+            - .config
+            - .config/winapps
+            - .local/bin
+            - .local/share/applications
+            - .local/share/winapps
+
+        - name: Add user Flathub remote
+          community.general.flatpak_remote:
+            name: flathub
+            flatpakrepo_url: https://flathub.org/repo/flathub.flatpakrepo
+            method: user
+            state: present
+
+        - name: Install desktop applications
+          community.general.flatpak:
+            name: "{{ item }}"
+            remote: flathub
+            method: user
+            state: present
+          loop: "{{ flatpak_apps }}"
+
+        - name: Read existing toolbx containers
+          ansible.builtin.command: podman ps -a --format json
+          register: podman_containers
+          changed_when: false
+
+        - name: Create development toolbx
+          ansible.builtin.command:
+            argv:
+              - toolbox
+              - create
+              - --assumeyes
+              - --container
+              - "{{ developer_container }}"
+              - --image
+              - "{{ developer_image }}"
+          when: >-
+            developer_container not in
+            (
+              podman_containers.stdout | from_json
+              | map(attribute='Names') | flatten | list
+            )
+
+        - name: Create VS Code desktop launcher
+          ansible.builtin.copy:
+            dest: "{{ developer_home }}/.local/share/applications/dev-code.desktop"
+            mode: "0644"
+            content: |
+              [Desktop Entry]
+              Name=VS Code — Development Toolbx
+              Comment=Editor and tools inside the development environment
+              Exec=toolbox run --container {{ developer_container }} code --reuse-window %F
+              Terminal=false
+              Type=Application
+              Categories=Development;IDE;
+              StartupNotify=true
+              MimeType=text/plain;inode/directory;
+
+        - name: Create development shell launcher
+          ansible.builtin.copy:
+            dest: "{{ developer_home }}/.local/bin/dev"
+            mode: "0755"
+            content: |
+              #!/bin/sh
+              exec toolbox enter --container {{ developer_container }}
+
+        - name: Install BlueBubbles desktop client
+          community.general.flatpak:
+            name: "{{ bluebubbles_flatpak_id }}"
+            remote: flathub
+            method: user
+            state: present
+          when: enable_bluebubbles_client | bool
+
+        - name: Require pinned WinApps configuration
+          ansible.builtin.assert:
+            that:
+              - winapps_revision | length > 0
+              - winapps_windows_address | length > 0
+              - winapps_windows_username | length > 0
+              - winapps_windows_password | length > 0
+          when: enable_winapps | bool
+          no_log: true
+
+        - name: Check out WinApps
+          ansible.builtin.git:
+            repo: "{{ winapps_repository }}"
+            dest: "{{ developer_home }}/.local/share/winapps"
+            version: "{{ winapps_revision }}"
+          when: enable_winapps | bool
+
+        - name: Write WinApps connection configuration
+          ansible.builtin.copy:
+            dest: "{{ developer_home }}/.config/winapps/winapps.conf"
+            mode: "0600"
+            content: |
+              RDP_USER={{ winapps_windows_username | quote }}
+              RDP_PASS={{ winapps_windows_password | quote }}
+              RDP_IP={{ winapps_windows_address | quote }}
+          when: enable_winapps | bool
+          no_log: true
+
+        - name: Optional personal configuration
+          ansible.builtin.include_tasks: tasks/personal.yml
+          when: enable_personal | bool
+
+    - name: Optional Pi-hole configuration
+      ansible.builtin.include_tasks: tasks/pihole.yml
+      when: enable_pihole | bool

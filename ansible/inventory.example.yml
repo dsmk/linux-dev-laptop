@@ -1,0 +1,14 @@
+---
+all:
+  children:
+    silverblue:
+      hosts:
+        laptop:
+          ansible_host: 192.168.1.50
+          ansible_user: dsmk
+
+    macos:
+      hosts:
+        bluebubbles_mac:
+          ansible_host: 192.168.1.60
+          ansible_user: dsmk

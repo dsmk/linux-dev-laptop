@@ -1,0 +1,51 @@
+name: Verify configuration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tools
+        run: |
+          python -m pip install \
+            ansible-core ansible-lint yamllint
+
+          ansible-galaxy collection install \
+            -r ansible/requirements.yml
+
+      - name: Check workflow and configuration YAML
+        run: |
+          yamllint \
+            -d '{extends: relaxed, rules: {line-length: disable}}' \
+            ansible .github/workflows
+
+      - name: Check Ansible syntax
+        run: |
+          ansible-playbook \
+            -i ansible/inventory.example.yml \
+            --syntax-check ansible/silverblue.yml
+
+          ansible-playbook \
+            -i ansible/inventory.example.yml \
+            --syntax-check ansible/macos.yml
+
+      - name: Lint Ansible
+        run: |
+          ansible-lint ansible/silverblue.yml ansible/macos.yml
+
+      - name: Check shell script syntax
+        run: bash -n tests/container-smoke.sh
