@@ -1,0 +1,44 @@
+FROM registry.fedoraproject.org/fedora-toolbox:44
+
+USER root
+
+# Version should be pinned by the workflow/repository.
+#ARG CLAUDE_CODE_VERSION
+ENV CLAUDE_CODE_VERSION 2.1.296
+
+
+RUN dnf install -y \
+      ca-certificates curl wget git git-lfs \
+      gcc gcc-c++ make cmake ninja-build \
+      python3 python3-pip python3-devel \
+      nodejs npm golang \
+      jq yq ripgrep fd-find fzf \
+      openssh-clients \
+      ansible-core \
+      krb5-workstation \
+      unzip tar gzip \
+      libicu openssl-libs libunwind \
+    && dnf clean all
+
+# VS Code repository.
+RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
+    && printf '%s\n' \
+       '[code]' \
+       'name=Visual Studio Code' \
+       'baseurl=https://packages.microsoft.com/yumrepos/vscode' \
+       'enabled=1' \
+       'gpgcheck=1' \
+       'gpgkey=https://packages.microsoft.com/keys/microsoft.asc' \
+       > /etc/yum.repos.d/vscode.repo \
+    && dnf install -y code \
+    && dnf clean all
+
+# This uses the npm distribution. Review Anthropic's current installation
+# guidance when choosing or updating the pinned version.
+RUN test -n "${CLAUDE_CODE_VERSION}" \
+    && npm install --global \
+       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && npm cache clean --force
+
+# Toolbx performs user setup when the container is created.
+# Do not bake dsmk or personal authentication into this image.

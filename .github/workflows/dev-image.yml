@@ -1,0 +1,79 @@
+name: Build development image
+
+on:
+  pull_request:
+    paths:
+      - containers/dev/**
+      - tests/container-smoke.sh
+      - .github/workflows/dev-image.yml
+  push:
+    branches: [main]
+    paths:
+      - containers/dev/**
+      - tests/container-smoke.sh
+      - .github/workflows/dev-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      #- name: Require a pinned Claude Code version
+      #  env:
+      #    CLAUDE_VERSION: ${{ vars.CLAUDE_CODE_VERSION }}
+      #  run: test -n "$CLAUDE_VERSION"
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Set image name
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${OWNER}/developer-platform-dev" \
+            >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          podman build \
+            --tag "$IMAGE:${GITHUB_SHA}" \
+            containers/dev
+
+      #  env:
+      #    CLAUDE_VERSION: ${{ vars.CLAUDE_CODE_VERSION }}
+      #      --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_VERSION" \
+
+      - name: Smoke test
+        run: |
+          podman run --rm \
+            --volume "$PWD/tests:/tests:ro" \
+            "$IMAGE:${GITHUB_SHA}" \
+            bash /tests/container-smoke.sh
+
+      - name: Authenticate to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" |
+            podman login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        run: |
+          podman push "$IMAGE:${GITHUB_SHA}"
+          podman tag "$IMAGE:${GITHUB_SHA}" "$IMAGE:main"
+          podman push "$IMAGE:main"
