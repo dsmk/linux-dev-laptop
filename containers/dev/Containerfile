@@ -4,7 +4,7 @@ USER root
 
 # Version should be pinned by the workflow/repository.
 #ARG CLAUDE_CODE_VERSION
-ENV CLAUDE_CODE_VERSION 2.1.296
+ENV CLAUDE_CODE_VERSION 2.1.304
 
 
 RUN dnf install -y \
@@ -14,6 +14,7 @@ RUN dnf install -y \
       nodejs npm golang \
       jq yq ripgrep fd-find fzf \
       openssh-clients \
+      podman \
       ansible-core \
       krb5-workstation \
       unzip tar gzip \
@@ -40,5 +41,7 @@ RUN test -n "${CLAUDE_CODE_VERSION}" \
        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force
 
+COPY --chmod=0644 podman.sh /etc/profile.d/podman.sh
+
 # Toolbx performs user setup when the container is created.
-# Do not bake dsmk or personal authentication into this image.
+# Do not bake personal authentication into this image.

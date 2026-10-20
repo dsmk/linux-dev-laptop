@@ -4,22 +4,43 @@ on:
   pull_request:
     paths:
       - containers/dev/**
-      - tests/container-smoke.sh
+      - tests/smoke-dev-container.sh
       - .github/workflows/dev-image.yml
   push:
     branches: [main]
     paths:
       - containers/dev/**
-      - tests/container-smoke.sh
+      - tests/smoke-dev-container.sh
       - .github/workflows/dev-image.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: dev-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Kept in one place so the build and manifest jobs agree.
+  IMAGE_NAME: developer-platform-dev
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # One native runner per architecture. Emulating aarch64 would make the
+    # dnf and npm steps unreasonably slow, and free arm64 runners are
+    # available to public repositories.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
 
     permissions:
       contents: read
@@ -41,13 +62,13 @@ jobs:
       - name: Set image name
         run: |
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE=ghcr.io/${OWNER}/developer-platform-dev" \
-            >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
           podman build \
-            --tag "$IMAGE:${GITHUB_SHA}" \
+            --platform "linux/${{ matrix.arch }}" \
+            --tag "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}" \
             containers/dev
 
       #  env:
@@ -58,7 +79,7 @@ jobs:
         run: |
           podman run --rm \
             --volume "$PWD/tests:/tests:ro" \
-            "$IMAGE:${GITHUB_SHA}" \
+            "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}" \
             bash /tests/smoke-dev-container.sh
 
       - name: Authenticate to GHCR
@@ -71,9 +92,57 @@ jobs:
               --username "$GITHUB_ACTOR" \
               --password-stdin
 
-      - name: Publish
+      - name: Publish architecture image
         if: github.event_name != 'pull_request'
         run: |
-          podman push "$IMAGE:${GITHUB_SHA}"
-          podman tag "$IMAGE:${GITHUB_SHA}" "$IMAGE:main"
-          podman push "$IMAGE:main"
+          podman push "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}"
+
+  manifest:
+    # Joins the per-architecture images published above into a single
+    # multi-arch manifest, so `podman pull` picks the right one.
+    name: publish manifest
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Set image name
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_ENV"
+
+      - name: Authenticate to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" |
+            podman login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Assemble manifest
+        run: |
+          podman manifest create "$IMAGE:${GITHUB_SHA}"
+
+          for arch in amd64 arm64; do
+            podman manifest add \
+              "$IMAGE:${GITHUB_SHA}" \
+              "docker://$IMAGE:${GITHUB_SHA}-${arch}"
+          done
+
+      - name: Publish
+        run: |
+          podman manifest push --all \
+            "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:${GITHUB_SHA}"
+
+          podman manifest push --all \
+            "$IMAGE:${GITHUB_SHA}" "docker://$IMAGE:main"
