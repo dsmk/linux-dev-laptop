@@ -4,7 +4,7 @@ USER root
 
 # Version should be pinned by the workflow/repository.
 #ARG CLAUDE_CODE_VERSION
-ENV CLAUDE_CODE_VERSION 2.1.304
+ENV CLAUDE_CODE_VERSION 2.1.306
 
 
 RUN dnf install -y \
@@ -22,7 +22,7 @@ RUN dnf install -y \
       opentofu \
       podman \
       python3 python3-pip python3-devel \
-      ripgrep 
+      ripgrep \
       rust rust-std-static \
       tar \
       unzip wget yq \
