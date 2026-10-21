@@ -8,17 +8,24 @@ ENV CLAUDE_CODE_VERSION 2.1.304
 
 
 RUN dnf install -y \
-      ca-certificates curl wget git git-lfs \
-      gcc gcc-c++ make cmake ninja-build \
-      python3 python3-pip python3-devel \
-      nodejs npm golang \
-      jq yq ripgrep fd-find fzf \
-      openssh-clients \
-      podman \
       ansible-core \
+      ca-certificates cargo cmake curl \
+      fd-find fzf \
+      gcc gcc-c++ \
+      gh git git-lfs golang gzip \
+      jq \
       krb5-workstation \
-      unzip tar gzip \
-      libicu openssl-libs libunwind \
+      libicu libunwind \
+      make ninja-build \
+      nodejs npm \
+      openssh-clients openssl-libs \
+      opentofu \
+      podman \
+      python3 python3-pip python3-devel \
+      ripgrep 
+      rust rust-std-static \
+      tar \
+      unzip wget yq \
     && dnf clean all
 
 # VS Code repository.

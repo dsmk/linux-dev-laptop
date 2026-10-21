@@ -2,16 +2,21 @@
 set -euo pipefail
 
 for command in \
-  git gcc make python3 node npm go \
-  jq rg fd fzf ssh ansible code 
+  ansible ansible-playbook code fd fzf \
+  gcc git go jq make node npm python3 \
+  rg ssh yq 
 do
   command -v "$command"
 done
 echo "Check versions to make certain they start"
-python3 --version
-node --version
-go version
 ansible --version
+gh --version
+go version
+node --version
+npm --version
+python3 --version
+rustc --version 
+tofu --version 
 
 # Image smoke tests run as root, unlike interactive toolbx sessions.
 # --no-sandbox is used only for this root-run version check.
