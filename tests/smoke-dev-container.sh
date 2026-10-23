@@ -2,7 +2,7 @@
 set -euo pipefail
 
 for command in \
-  ansible ansible-playbook code fd fzf \
+  ansible ansible-playbook aws code fd fzf \
   gcc git go jq kubectl make node npm python3 \
   rg rustc ssh tofu yq 
 do
@@ -10,6 +10,7 @@ do
 done
 echo "Check versions to make certain they start"
 ansible --version
+aws --version
 gh --version
 go version
 node --version

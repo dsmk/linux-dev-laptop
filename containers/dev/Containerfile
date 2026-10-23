@@ -8,7 +8,7 @@ ENV CLAUDE_CODE_VERSION 2.1.306
 
 
 RUN dnf install -y \
-      ansible-core \
+      ansible-core awscli2 \
       ca-certificates cargo cmake curl \
       fd-find fzf \
       gcc gcc-c++ \
