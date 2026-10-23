@@ -3,8 +3,8 @@ set -euo pipefail
 
 for command in \
   ansible ansible-playbook code fd fzf \
-  gcc git go jq make node npm python3 \
-  rg ssh yq 
+  gcc git go jq kubectl make node npm python3 \
+  rg rustc ssh tofu yq 
 do
   command -v "$command"
 done
@@ -14,6 +14,7 @@ gh --version
 go version
 node --version
 npm --version
+kubectl version --client
 python3 --version
 rustc --version 
 tofu --version 

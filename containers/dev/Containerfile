@@ -41,6 +41,37 @@ RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
     && dnf install -y code \
     && dnf clean all
 
+# kubectl from the upstream Kubernetes release channel. Nothing here needs a
+# Red Hat subscription, so the resulting image can be published publicly.
+# TARGETARCH is supplied by the builder and follows --platform.
+ARG TARGETARCH
+ARG KUBECTL_VERSION=v1.37.1
+ARG KUBECTL_URL=https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl
+RUN \
+    curl -sSL --fail-with-body -o /var/tmp/kubectl ${KUBECTL_URL} \
+    && curl -sSL --fail-with-body -o /var/tmp/kubectl.sha256 ${KUBECTL_URL}.sha256 \
+    && printf '%s  %s\n' "$(cat /var/tmp/kubectl.sha256)" /var/tmp/kubectl \
+       | sha256sum --check - \
+    && install -m 0755 /var/tmp/kubectl /usr/local/bin/kubectl \
+    && rm /var/tmp/kubectl /var/tmp/kubectl.sha256
+
+# argoproj publishes one checksum file per release rather than one per asset,
+# so the matching line is selected by asset name before the check.
+ARG ARGOCD_VERSION=v3.5.4
+ARG ARGOCD_RELEASE=https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}
+ARG ARGOCD_ASSET=argocd-linux-${TARGETARCH}
+RUN \
+    curl -sSL --fail-with-body -o /var/tmp/argocd ${ARGOCD_RELEASE}/${ARGOCD_ASSET} \
+    && curl -sSL --fail-with-body \
+       -o /var/tmp/cli_checksums.txt ${ARGOCD_RELEASE}/cli_checksums.txt \
+    && printf '%s  %s\n' \
+       "$(awk -v asset="${ARGOCD_ASSET}" '$2 == asset { print $1 }' \
+          /var/tmp/cli_checksums.txt)" \
+       /var/tmp/argocd \
+       | sha256sum --check - \
+    && install -m 0755 /var/tmp/argocd /usr/local/bin/argocd \
+    && rm /var/tmp/argocd /var/tmp/cli_checksums.txt
+
 # This uses the npm distribution. Review Anthropic's current installation
 # guidance when choosing or updating the pinned version.
 RUN test -n "${CLAUDE_CODE_VERSION}" \
