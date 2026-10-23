@@ -1,0 +1,21 @@
+---
+# Builds only the Windows instance. The Silverblue playbook includes the same
+# tasks when enable_winapps_instance is true; this entry point exists so the
+# instance can be rebuilt without running the rest of the laptop setup.
+- name: Build the Windows instance for WinApps
+  hosts: all
+  gather_facts: true
+
+  vars_files:
+    - group_vars/all.yml
+
+  pre_tasks:
+    - name: Require a Linux host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system == "Linux"
+        fail_msg: "The Windows instance runs under Podman on Linux."
+
+  tasks:
+    - name: Build the Windows instance
+      ansible.builtin.include_tasks: tasks/winapps-instance.yml

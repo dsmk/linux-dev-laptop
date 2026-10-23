@@ -162,9 +162,13 @@
           ansible.builtin.assert:
             that:
               - winapps_revision | length > 0
-              - winapps_windows_address | length > 0
-              - winapps_windows_username | length > 0
-              - winapps_windows_password | length > 0
+              - winapps_rdp_ip | length > 0
+              - winapps_rdp_user | length > 0
+              - winapps_rdp_pass | length > 0
+            fail_msg: >-
+              Pin winapps_revision and give WinApps a Windows machine to
+              connect to, either by enabling enable_winapps_instance or by
+              setting the winapps_windows_* variables.
           when: enable_winapps | bool
           no_log: true
 
@@ -180,15 +184,21 @@
             dest: "{{ developer_home }}/.config/winapps/winapps.conf"
             mode: "0600"
             content: |
-              RDP_USER={{ winapps_windows_username | quote }}
-              RDP_PASS={{ winapps_windows_password | quote }}
-              RDP_IP={{ winapps_windows_address | quote }}
+              RDP_USER={{ winapps_rdp_user | quote }}
+              RDP_PASS={{ winapps_rdp_pass | quote }}
+              RDP_IP={{ winapps_rdp_ip | quote }}
+              RDP_PORT={{ winapps_rdp_port | quote }}
+              WAFLAVOR={{ winapps_flavor | quote }}
           when: enable_winapps | bool
           no_log: true
 
         - name: Optional personal configuration
           ansible.builtin.include_tasks: tasks/personal.yml
           when: enable_personal | bool
+
+    - name: Optional Windows instance for WinApps
+      ansible.builtin.include_tasks: tasks/winapps-instance.yml
+      when: enable_winapps_instance | bool
 
     - name: Optional Pi-hole configuration
       ansible.builtin.include_tasks: tasks/pihole.yml

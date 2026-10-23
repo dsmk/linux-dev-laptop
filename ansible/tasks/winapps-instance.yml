@@ -1,0 +1,186 @@
+---
+# Builds the Windows instance that WinApps connects to: a rootful Podman
+# container running Windows under KVM, published on the loopback interface
+# only. systemd owns the container through a Quadlet, so the WinApps client
+# uses WAFLAVOR="manual" rather than driving a compose project of its own.
+
+- name: Select the Windows image for this architecture
+  ansible.builtin.set_fact:
+    winapps_instance_image: >-
+      {{ winapps_instance_images[ansible_facts.architecture] | default('', true) }}
+
+- name: Require a supported architecture
+  ansible.builtin.assert:
+    that:
+      - winapps_instance_image | length > 0
+    fail_msg: >-
+      No Windows image is defined for {{ ansible_facts.architecture }}.
+      dockur publishes x86_64 and aarch64 images only.
+
+- name: Require pinned WinApps instance settings
+  ansible.builtin.assert:
+    that:
+      - winapps_revision | length > 0
+      - winapps_instance_username | length > 0
+      - winapps_instance_password | length > 0
+    fail_msg: >-
+      Set winapps_revision, winapps_instance_username and
+      winapps_instance_password before building the instance.
+  no_log: true
+
+- name: Check for hardware virtualisation
+  ansible.builtin.stat:
+    path: /dev/kvm
+  register: kvm_device
+
+- name: Require KVM
+  ansible.builtin.assert:
+    that:
+      - kvm_device.stat.exists
+    fail_msg: >-
+      /dev/kvm is missing. Windows would fall back to emulation, which is far
+      too slow to use.
+
+- name: Check Podman is present on the host
+  become: true
+  ansible.builtin.command: podman --version
+  register: podman_version
+  changed_when: false
+
+- name: Note what an ARM host runs
+  ansible.builtin.debug:
+    msg:
+      - "{{ ansible_facts.architecture }} runs the Windows on ARM build, so
+         only ARM64 and emulated x86 Windows applications will work."
+      - "Apple Silicon hosts boot a 16K page size kernel. If Windows never
+         reaches the desktop, watch the installer in the web viewer before
+         assuming the container is misconfigured."
+  when: ansible_facts.architecture == "aarch64"
+
+- name: Create instance directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - /etc/containers/systemd
+    - "{{ winapps_instance_state_dir }}"
+    - "{{ winapps_instance_state_dir }}/storage"
+    - "{{ winapps_instance_state_dir }}/oem"
+
+- name: Check out WinApps for the OEM payload
+  become: true
+  ansible.builtin.git:
+    repo: "{{ winapps_repository }}"
+    dest: "{{ winapps_instance_state_dir }}/winapps"
+    version: "{{ winapps_revision }}"
+
+- name: Install the OEM payload Windows runs after setup
+  become: true
+  # install.bat imports RDPApps.reg, which is what makes RemoteApp sessions
+  # work, and opens the Remote Desktop firewall rules.
+  ansible.builtin.copy:
+    src: "{{ winapps_instance_state_dir }}/winapps/oem/"
+    dest: "{{ winapps_instance_state_dir }}/oem/"
+    remote_src: true
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Write the instance environment file
+  become: true
+  ansible.builtin.copy:
+    dest: "{{ winapps_instance_state_dir }}/instance.env"
+    mode: "0600"
+    content: |
+      VERSION={{ winapps_instance_windows_version }}
+      USERNAME={{ winapps_instance_username }}
+      PASSWORD={{ winapps_instance_password }}
+      RAM_SIZE={{ winapps_instance_ram }}
+      CPU_CORES={{ winapps_instance_cpu_cores }}
+      DISK_SIZE={{ winapps_instance_disk_size }}
+      LANGUAGE={{ winapps_instance_language }}
+      REGION={{ winapps_instance_region }}
+      KEYBOARD={{ winapps_instance_keyboard }}
+  no_log: true
+  register: winapps_instance_env
+
+- name: Install the WinApps instance Quadlet
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/containers/systemd/winapps.container
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Windows instance for WinApps
+      Wants=network-online.target
+      After=network-online.target
+
+      [Container]
+      Image={{ winapps_instance_image }}
+      ContainerName={{ winapps_instance_container }}
+      EnvironmentFile={{ winapps_instance_state_dir }}/instance.env
+      AddDevice=/dev/kvm
+      AddDevice=/dev/net/tun
+      AddCapability=NET_ADMIN
+      # NET_RAW keeps the container's own DHCP and NAT working. Without it the
+      # published RDP port never reaches Windows.
+      AddCapability=NET_RAW
+      PublishPort=127.0.0.1:{{ winapps_instance_viewer_port }}:8006
+      PublishPort=127.0.0.1:{{ winapps_instance_rdp_port }}:3389/tcp
+      PublishPort=127.0.0.1:{{ winapps_instance_rdp_port }}:3389/udp
+      Volume={{ winapps_instance_state_dir }}/storage:/storage:Z
+      Volume={{ winapps_instance_state_dir }}/oem:/oem:Z
+      {% if winapps_instance_shared_path | length > 0 %}
+      Volume={{ winapps_instance_shared_path }}:/shared:z
+      {% endif %}
+      # Give Windows time to shut down cleanly.
+      StopTimeout=120
+
+      [Service]
+      Restart=on-failure
+      # The first boot installs Windows, which takes much longer than the
+      # default start timeout allows.
+      TimeoutStartSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+  register: winapps_instance_unit
+
+- name: Start the WinApps instance
+  # Changed settings recreate the container. Windows itself survives, since it
+  # lives on the storage directory, but the account details are only applied
+  # during the unattended installation.
+  become: true
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    name: winapps.service
+    state: >-
+      {{
+        'restarted'
+        if (winapps_instance_unit is changed or winapps_instance_env is changed)
+        else 'started'
+      }}
+
+- name: Report where to watch the installation
+  ansible.builtin.debug:
+    msg:
+      - "Windows installs itself unattended on the first run, which takes a
+         while because the installation media is downloaded first."
+      - "Follow it at http://127.0.0.1:{{ winapps_instance_viewer_port }}."
+
+- name: Wait for Windows to accept RDP connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ winapps_instance_rdp_port }}"
+    timeout: "{{ winapps_instance_wait_timeout }}"
+    sleep: 15
+  when: winapps_instance_wait | bool
+
+- name: Report the finished instance
+  ansible.builtin.debug:
+    msg:
+      - "Windows is answering RDP on 127.0.0.1:{{ winapps_instance_rdp_port }}."
+      - "Run 'winapps-setup --user' as {{ developer_user }} to detect the
+         installed applications and create their launchers."
+  when: winapps_instance_wait | bool

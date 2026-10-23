@@ -29,6 +29,55 @@ winapps_windows_address: ""
 winapps_windows_username: ""
 winapps_windows_password: ""
 
+# The Windows instance WinApps connects to, built on this host by
+# ansible/tasks/winapps-instance.yml as a rootful Podman container.
+enable_winapps_instance: false
+
+winapps_instance_container: WinApps
+winapps_instance_state_dir: /var/lib/winapps
+
+# dockur publishes a separate image for Windows on ARM. Pin these to an image
+# digest once a release has been reviewed.
+winapps_instance_images:
+  x86_64: docker.io/dockurr/windows:6.06
+  aarch64: docker.io/dockurr/windows-arm:6.06
+
+winapps_instance_windows_version: "11"
+winapps_instance_ram: 8G
+winapps_instance_cpu_cores: 4
+winapps_instance_disk_size: 128G
+winapps_instance_language: English
+winapps_instance_region: en-US
+winapps_instance_keyboard: en-US
+
+winapps_instance_username: winapps
+winapps_instance_password: ""
+
+# Published on the loopback interface only: RDP for WinApps, and a web viewer
+# for watching the unattended installation.
+winapps_instance_rdp_port: 3389
+winapps_instance_viewer_port: 8006
+
+# A host directory to expose as drive Z:. FreeRDP already shares the home
+# directory through +home-drive, so this is usually unnecessary.
+winapps_instance_shared_path: ""
+
+# Windows installs itself on the first run. Set this to false to finish the
+# play without waiting for that to complete.
+winapps_instance_wait: true
+winapps_instance_wait_timeout: 5400
+
+# WinApps talks to whichever Windows it is given: the instance built here, or
+# a machine managed elsewhere.
+winapps_rdp_ip: "{{ '127.0.0.1' if enable_winapps_instance | bool else winapps_windows_address }}"
+winapps_rdp_port: "{{ winapps_instance_rdp_port if enable_winapps_instance | bool else 3389 }}"
+winapps_rdp_user: "{{ winapps_instance_username if enable_winapps_instance | bool else winapps_windows_username }}"
+winapps_rdp_pass: "{{ winapps_instance_password if enable_winapps_instance | bool else winapps_windows_password }}"
+
+# systemd owns the container, so WinApps should not try to start or pause it.
+# The 'podman' flavour expects a rootless compose project it manages itself.
+winapps_flavor: manual
+
 # Host package names should be verified against the active Fedora release.
 host_packages:
   - freerdp
