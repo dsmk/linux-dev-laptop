@@ -7,7 +7,7 @@ USER root
 ENV CLAUDE_CODE_VERSION 2.1.306
 
 
-RUN dnf copr enable atim/starship \
+RUN dnf copr enable -y atim/starship \
     && dnf install -y \
       android-tools ansible-core awscli2 \
       ca-certificates cargo cmake curl \
