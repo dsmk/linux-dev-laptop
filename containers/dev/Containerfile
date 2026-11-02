@@ -9,12 +9,12 @@ ENV CLAUDE_CODE_VERSION 2.1.306
 
 RUN dnf copr enable -y atim/starship \
     && dnf install -y \
-      android-tools ansible-core awscli2 \
+      alacritty android-tools ansible-core awscli2 \
       ca-certificates cargo cmake curl \
       fd-find fzf \
       gcc gcc-c++ \
       gh git git-lfs golang gzip \
-      jq \
+      jq kind \
       krb5-workstation \
       libicu libunwind \
       make ninja-build \
@@ -27,7 +27,7 @@ RUN dnf copr enable -y atim/starship \
       rust rust-std-static \
       starship \
       tar \
-      unzip wget yq \
+      unzip wget yq zstd \
     && dnf clean all
 
 # VS Code repository.
@@ -73,6 +73,9 @@ RUN \
        | sha256sum --check - \
     && install -m 0755 /var/tmp/argocd /usr/local/bin/argocd \
     && rm /var/tmp/argocd /var/tmp/cli_checksums.txt
+
+RUN curl -L -o /usr/local/bin/ot https://github.com/OpenTodoApp/OpenTodo/releases/download/v0.16.0/ot-linux-amd64 \
+    && chmod +x /usr/local/bin/ot
 
 # This uses the npm distribution. Review Anthropic's current installation
 # guidance when choosing or updating the pinned version.
