@@ -77,12 +77,13 @@ RUN \
 RUN curl -L -o /usr/local/bin/ot https://github.com/OpenTodoApp/OpenTodo/releases/download/v0.16.0/ot-linux-amd64 \
     && chmod +x /usr/local/bin/ot
 
-# This uses the npm distribution. Review Anthropic's current installation
+# Remove this so we can have Claude installed locally since it updates frequently.
+#This uses the npm distribution. Review Anthropic's current installation
 # guidance when choosing or updating the pinned version.
-RUN test -n "${CLAUDE_CODE_VERSION}" \
-    && npm install --global \
-       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-    && npm cache clean --force
+#RUN test -n "${CLAUDE_CODE_VERSION}" \
+#    && npm install --global \
+#       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+#    && npm cache clean --force
 
 COPY --chmod=0644 podman.sh /etc/profile.d/podman.sh
 
