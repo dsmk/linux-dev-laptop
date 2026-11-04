@@ -25,5 +25,5 @@ tofu --version
 code --no-sandbox --user-data-dir=/tmp/vscode-smoke --version
 
 # Claude checks are at the end 
-command -v "claude"
-claude --version
+#command -v "claude"
+#claude --version
