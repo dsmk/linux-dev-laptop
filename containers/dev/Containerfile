@@ -9,12 +9,18 @@ ENV CLAUDE_CODE_VERSION 2.1.306
 
 RUN dnf copr enable -y atim/starship \
     && dnf install -y \
-      alacritty android-tools ansible-core awscli2 \
+      android-tools ansible-core awscli2 \
       ca-certificates cargo cmake curl \
       fd-find fzf \
       gcc gcc-c++ \
       gh git git-lfs golang gzip \
       jq kind \
+      android-tools ansible-core awscli2 \
+      ca-certificates cargo chezmoi cmake curl \
+      fd-find fzf \
+      gcc gcc-c++ \
+      gh git git-lfs golang gzip \
+      jq just \
       krb5-workstation \
       libicu libunwind \
       make ninja-build \
