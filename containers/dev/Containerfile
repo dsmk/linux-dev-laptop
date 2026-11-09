@@ -7,6 +7,17 @@ USER root
 ENV CLAUDE_CODE_VERSION 2.1.306
 
 
+# libsecret is here on purpose and is easy to lose in the list below.
+# VS Code's Electron runtime reaches the OS keyring by dlopen()ing
+# libsecret-1.so.0 at runtime rather than linking against it, so the `code`
+# RPM has carried no dependency on it since 1.83 (1.78.0-1.82.3 were the last
+# versions that declared one).  On a full GNOME desktop the library is always
+# present and the omission never shows; in a minimal toolbx container nothing
+# else pulls it in, and VS Code opens with "the OS keyring is not available
+# for encryption" and no durable credential storage.  The Secret Service
+# itself stays on the host - toolbx bind-mounts /run/user/$UID, so the host's
+# gnome-keyring-daemon answers over the shared session bus.  Only the client
+# library belongs in the image; do not install gnome-keyring here.
 RUN dnf copr enable -y atim/starship \
     && dnf install -y \
       android-tools ansible-core awscli2 \
@@ -22,7 +33,7 @@ RUN dnf copr enable -y atim/starship \
       gh git git-lfs golang gzip \
       jq just \
       krb5-workstation \
-      libicu libunwind \
+      libicu libsecret libunwind \
       make ninja-build \
       nodejs npm \
       openssh-clients openssl-libs \
