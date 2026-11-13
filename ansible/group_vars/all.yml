@@ -2,13 +2,14 @@
 developer_user: dsmk
 developer_container: dev
 
-# Set these to published image digests for repeatable deployments.
-# Both images are built from containers/dev/Containerfile; see containers/README.md.
+# Set this to a published image digest for repeatable deployments.
+# Built from images/developer-platform-dev; see images/README.md.
+# One image serves both tools: it carries the toolbx label and the
+# host-integration utilities distrobox needs.
 developer_image: ghcr.io/dsmk/developer-platform-dev:main
-developer_distrobox_image: ghcr.io/dsmk/developer-platform-distrobox:main
 
 # The distrobox container is optional: toolbx is the default on Silverblue,
-# distrobox is what the same image set is used through on other hosts.
+# distrobox is how the same image is used on other hosts.
 enable_distrobox: false
 developer_distrobox_container: dev-distrobox
 

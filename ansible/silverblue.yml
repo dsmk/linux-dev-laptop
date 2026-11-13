@@ -137,7 +137,7 @@
               - --name
               - "{{ developer_distrobox_container }}"
               - --image
-              - "{{ developer_distrobox_image }}"
+              - "{{ developer_image }}"
           when:
             - enable_distrobox | bool
             - >-

@@ -1,0 +1,133 @@
+# developer-platform-dev -- the development environment.
+#
+# A standalone image: `podman build images/developer-platform-dev` is all it
+# takes. It is the large one in this repository on purpose, carrying the
+# toolchain, VS Code and the language runtimes.
+#
+# Usable through either tool, because it carries both the toolbx label and
+# the host-integration utilities distrobox expects:
+#
+#   toolbox create --container dev --image ghcr.io/dsmk/developer-platform-dev:main
+#   distrobox create --name dev --image ghcr.io/dsmk/developer-platform-dev:main
+#
+# Nothing here may depend on a Red Hat subscription: the image is published
+# publicly to GHCR.
+
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora-toolbox:44
+FROM ${BASE_IMAGE}
+
+# Supplied by the builder, follows --platform.
+ARG TARGETARCH
+
+# Pinned versions for everything installed outside dnf. Bump them here;
+# scripts/validate.sh checks they are set.
+ARG KUBECTL_VERSION=v1.37.1
+ARG ARGOCD_VERSION=v3.5.4
+ARG OT_VERSION=v0.16.0
+
+# Both optional and empty by default; see images/README.md. DNF_BASEURL pins
+# dnf to one mirror for builds behind a named-host network policy, and also
+# disables fedora-cisco-openh264, whose RPMs are plain HTTP and cannot cross
+# an HTTPS proxy. PROXY_CA_CERT trusts an extra CA during the build. Both
+# change what the build does, so published images leave them unset.
+ARG DNF_BASEURL=
+ARG PROXY_CA_CERT=
+
+USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN if [[ -n "${PROXY_CA_CERT}" ]]; then \
+      printf '%s\n' "${PROXY_CA_CERT}" \
+        > /etc/pki/ca-trust/source/anchors/build-proxy.crt \
+      && update-ca-trust extract; \
+    fi \
+    && if [[ -n "${DNF_BASEURL}" ]]; then \
+         dnf config-manager setopt \
+           fedora.metalink= \
+           "fedora.baseurl=${DNF_BASEURL}/releases/\$releasever/Everything/\$basearch/os/" \
+           updates.metalink= \
+           "updates.baseurl=${DNF_BASEURL}/updates/\$releasever/Everything/\$basearch/" \
+           fedora-cisco-openh264.enabled=0; \
+       fi
+
+COPY packages.txt /usr/share/developer-platform/packages.txt
+
+RUN dnf copr enable -y atim/starship \
+    && mapfile -t packages < <( \
+         sed -e 's/#.*//' -e 's/[[:space:]]//g' \
+             /usr/share/developer-platform/packages.txt \
+         | grep -v '^$' ) \
+    && dnf install -y "${packages[@]}" \
+    && dnf clean all
+
+# VS Code.
+RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
+    && printf '%s\n' \
+       '[code]' \
+       'name=Visual Studio Code' \
+       'baseurl=https://packages.microsoft.com/yumrepos/vscode' \
+       'enabled=1' \
+       'gpgcheck=1' \
+       'gpgkey=https://packages.microsoft.com/keys/microsoft.asc' \
+       > /etc/yum.repos.d/vscode.repo \
+    && dnf install -y code \
+    && dnf clean all
+
+# kubectl from the upstream Kubernetes release channel.
+ARG KUBECTL_URL=https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl
+RUN curl -sSL --fail-with-body -o /var/tmp/kubectl "${KUBECTL_URL}" \
+    && curl -sSL --fail-with-body -o /var/tmp/kubectl.sha256 "${KUBECTL_URL}.sha256" \
+    && printf '%s  %s\n' "$(cat /var/tmp/kubectl.sha256)" /var/tmp/kubectl \
+       | sha256sum --check - \
+    && install -m 0755 /var/tmp/kubectl /usr/local/bin/kubectl \
+    && rm /var/tmp/kubectl /var/tmp/kubectl.sha256
+
+# argoproj publishes one checksum file per release rather than one per asset,
+# so the matching line is selected by asset name before the check.
+ARG ARGOCD_RELEASE=https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}
+ARG ARGOCD_ASSET=argocd-linux-${TARGETARCH}
+RUN curl -sSL --fail-with-body -o /var/tmp/argocd "${ARGOCD_RELEASE}/${ARGOCD_ASSET}" \
+    && curl -sSL --fail-with-body \
+       -o /var/tmp/cli_checksums.txt "${ARGOCD_RELEASE}/cli_checksums.txt" \
+    && printf '%s  %s\n' \
+       "$(awk -v asset="${ARGOCD_ASSET}" '$2 == asset { print $1 }' \
+          /var/tmp/cli_checksums.txt)" \
+       /var/tmp/argocd \
+       | sha256sum --check - \
+    && install -m 0755 /var/tmp/argocd /usr/local/bin/argocd \
+    && rm /var/tmp/argocd /var/tmp/cli_checksums.txt
+
+# OpenTodo. Upstream publishes no checksum file and amd64 binaries only, so
+# this is installed on x86_64 and skipped elsewhere rather than failing the
+# arm64 build.
+ARG OT_RELEASE=https://github.com/OpenTodoApp/OpenTodo/releases/download/${OT_VERSION}
+RUN if [[ "${TARGETARCH}" == "amd64" ]]; then \
+      curl -sSL --fail-with-body -o /var/tmp/ot "${OT_RELEASE}/ot-linux-amd64" \
+      && install -m 0755 /var/tmp/ot /usr/local/bin/ot \
+      && rm /var/tmp/ot; \
+    else \
+      echo "ot: no ${TARGETARCH} build published upstream, skipping"; \
+    fi
+
+# VS Code extensions cannot be baked in: toolbx and distrobox mount the
+# host's home directory over the image's, and extensions live in
+# $HOME/.vscode/extensions. The list and an idempotent installer ship instead,
+# so `dev-install-extensions` sets up a new home in one command.
+COPY --chmod=0644 extensions.txt /usr/share/developer-platform/extensions.txt
+COPY --chmod=0755 install-extensions.sh /usr/local/bin/dev-install-extensions
+
+# Claude Code is deliberately NOT baked in. It releases far more often than
+# this image, so it is installed into the developer's home directory instead
+# and updates itself there.
+
+COPY --chmod=0644 profile.d/podman.sh /etc/profile.d/podman.sh
+
+# toolbx refuses an image without this label; distrobox ignores it.
+LABEL com.github.containers.toolbox="true" \
+      org.opencontainers.image.title="developer-platform-dev" \
+      org.opencontainers.image.description="Fedora development environment for toolbx and distrobox" \
+      org.opencontainers.image.source="https://github.com/dsmk/linux-dev-laptop" \
+      org.opencontainers.image.licenses="MIT"
+
+# toolbx and distrobox both perform user setup when the container is created.
+# Do not bake personal authentication into this image.

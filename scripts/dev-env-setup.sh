@@ -33,6 +33,7 @@ readonly BUILD_PROBES=(
   "packages.microsoft.com|https://packages.microsoft.com/yumrepos/vscode/repodata/repomd.xml"
   "dl.k8s.io|https://dl.k8s.io/release/stable.txt"
   "release-assets.githubusercontent.com|https://github.com/argoproj/argo-cd/releases/download/v3.5.4/cli_checksums.txt"
+  "storage.googleapis.com|https://storage.googleapis.com/ticrypt/connect/stable/4.1.4/tiCryptConnect-4.1.4.x86_64.rpm"
   "galaxy.ansible.com|https://galaxy.ansible.com/api/"
 )
 
@@ -105,7 +106,8 @@ if command -v curl >/dev/null 2>&1; then
       # failure or a proxy policy denial counts as blocked. curl writes 000
       # and exits non-zero when a CONNECT is refused, so the exit status has
       # to be captured outside the substitution.
-      code="$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 10 \
+      # --head keeps the probe cheap: one of these URLs is a 14 MB RPM.
+      code="$(curl -sSLI -o /dev/null -w '%{http_code}' --max-time 10 \
                 "${probe#*|}" 2>/dev/null)" || code="000"
       case "${code}" in
         000|403|407) : >"${probe_dir}/${index}" ;;
@@ -145,7 +147,7 @@ summary() {
   fi
 
   printf 'Validate with: scripts/validate.sh\n'
-  printf 'Build with:    containers/build.sh --flavor toolbx|distrobox --smoke\n'
+  printf 'Build with:    scripts/build-image.sh <image> --smoke\n'
 }
 
 if [[ "${mode}" == "report" ]]; then

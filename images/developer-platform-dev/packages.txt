@@ -1,0 +1,85 @@
+# Packages for the developer-platform-dev image.
+#
+# One package name per line; blank lines and '#' comments are ignored. Keep it
+# sorted with LC_ALL=C and free of duplicates -- scripts/validate.sh enforces
+# both.
+#
+# This image is used through both toolbx and distrobox, so it carries the
+# host-integration utilities distrobox shells out to (bc, lsof, rsync,
+# xorg-x11-xauth, ...) alongside the development toolchain. See
+# https://distrobox.it/compatibility/#containers-distros for that list.
+
+android-tools
+ansible-core
+awscli2
+bash-completion
+bc
+ca-certificates
+cargo
+chezmoi
+cmake
+curl
+diffutils
+fd-find
+findutils
+flatpak-xdg-utils
+fzf
+gcc
+gcc-c++
+gh
+git
+git-lfs
+glibc-langpack-en
+gnupg2
+golang
+gzip
+hostname
+iproute
+iputils
+jq
+just
+keyutils
+kind
+krb5-workstation
+less
+libicu
+libunwind
+lsof
+make
+mesa-dri-drivers
+ncurses
+ninja-build
+nodejs
+npm
+nss-mdns
+openssh-clients
+openssl-libs
+opentofu
+pam
+passwd
+pigz
+pinentry
+podman
+procps-ng
+python3
+python3-devel
+python3-pip
+ripgrep
+rsync
+rust
+rust-std-static
+shadow-utils
+starship
+sudo
+tar
+time
+tree
+unzip
+util-linux
+vte-profile
+wget
+which
+xorg-x11-xauth
+yq
+zip
+zstd

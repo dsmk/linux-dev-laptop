@@ -1,0 +1,18 @@
+# VS Code extensions this environment expects, installed by
+# `dev-install-extensions` rather than baked into the image: toolbx and
+# distrobox mount the host home directory, so $HOME/.vscode/extensions in the
+# image would be shadowed at runtime.
+#
+# One marketplace identifier per line; blank lines and '#' comments ignored.
+# Keep sorted with LC_ALL=C -- scripts/validate.sh enforces it.
+
+golang.go
+hashicorp.terraform
+ms-azuretools.vscode-docker
+ms-kubernetes-tools.vscode-kubernetes-tools
+ms-python.python
+ms-python.vscode-pylance
+redhat.ansible
+redhat.vscode-yaml
+rust-lang.rust-analyzer
+timonwong.shellcheck

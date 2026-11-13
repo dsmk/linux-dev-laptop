@@ -17,22 +17,13 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 cd "${REPO_ROOT}" || exit 1
 
-readonly FLAVOURS_CONF=containers/flavours.conf
-
-# Read the flavour registry rather than keeping a second copy of it here.
-flavour_names() {
-  awk -F'|' '!/^[[:space:]]*#/ && NF > 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1 }' \
-    "${FLAVOURS_CONF}"
-}
-flavour_lists() {
-  awk -F'|' -v name="$1" '
-    !/^[[:space:]]*#/ && NF > 1 {
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
-      if ($1 == name) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2 }
-    }' "${FLAVOURS_CONF}"
-}
-
-mapfile -t FLAVOURS < <(flavour_names)
+# Images are discovered, not registered: anything under images/ with a
+# Containerfile is one. Adding an image means adding a directory.
+mapfile -t IMAGES < <(
+  for dir in images/*/; do
+    [[ -f "${dir}Containerfile" ]] && basename "${dir}"
+  done | LC_ALL=C sort
+)
 
 failures=0
 skips=0
@@ -75,187 +66,159 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-group "package manifests"
+group "images"
 # ---------------------------------------------------------------------------
-# Strip comments and blanks the same way containers/dev/Containerfile does.
+if [[ "${#IMAGES[@]}" -eq 0 ]]; then
+  fail "no images found under images/"
+else
+  pass "found ${#IMAGES[@]} images: ${IMAGES[*]}"
+fi
+
+# Strip comments and blanks the same way each Containerfile does.
 manifest_entries() {
   sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'
 }
 
-mapfile -t all_manifests < <(printf '%s\n' containers/packages/*.txt | sort)
+check_sorted_list() {
+  local file="$1" what="$2" entries duplicates
 
-for manifest in "${all_manifests[@]}"; do
-  if [[ ! -f "${manifest}" ]]; then
-    fail "${manifest} is missing"
-    continue
-  fi
-
-  entries="$(manifest_entries "${manifest}")"
-
+  entries="$(manifest_entries "${file}")"
   if [[ -z "${entries}" ]]; then
-    fail "${manifest} lists no packages"
-    continue
+    fail "${file} lists no ${what}"
+    return
   fi
 
   if duplicates="$(printf '%s\n' "${entries}" | sort | uniq -d)" \
      && [[ -n "${duplicates}" ]]; then
-    fail "${manifest} has duplicates: ${duplicates//$'\n'/ }"
+    fail "${file} has duplicates: ${duplicates//$'\n'/ }"
   else
-    pass "${manifest} has no duplicates"
+    pass "${file} has no duplicates"
   fi
 
   if diff -q <(printf '%s\n' "${entries}") \
              <(printf '%s\n' "${entries}" | LC_ALL=C sort) >/dev/null; then
-    pass "${manifest} is sorted"
+    pass "${file} is sorted"
   else
-    fail "${manifest} is not sorted (LC_ALL=C sort)"
+    fail "${file} is not sorted (LC_ALL=C sort)"
     diff <(printf '%s\n' "${entries}") \
          <(printf '%s\n' "${entries}" | LC_ALL=C sort) | head -10
   fi
+}
 
-  if bad="$(printf '%s\n' "${entries}" | grep -vE '^[A-Za-z0-9][A-Za-z0-9._+-]*$')" \
-     && [[ -n "${bad}" ]]; then
-    fail "${manifest} has implausible package names: ${bad//$'\n'/ }"
-  else
-    pass "${manifest} package names look like RPM names"
-  fi
-done
+for image in "${IMAGES[@]}"; do
+  dir="images/${image}"
 
-# A package named by two of the lists one flavour installs would be handed to
-# dnf twice, and is a sign the lists have drifted.
-for flavour in "${FLAVOURS[@]}"; do
-  lists="$(flavour_lists "${flavour}")"
-  if [[ -z "${lists}" ]]; then
-    fail "${flavour} names no package lists in ${FLAVOURS_CONF}"
-    continue
-  fi
-
-  combined=""
-  missing_list=false
-  for list in ${lists}; do
-    manifest="containers/packages/${list}.txt"
-    if [[ ! -f "${manifest}" ]]; then
-      fail "${flavour} names a missing package list: packages/${list}.txt"
-      missing_list=true
-      continue
-    fi
-    combined+="$(manifest_entries "${manifest}")"$'\n'
-  done
-  [[ "${missing_list}" == true ]] && continue
-
-  if overlap="$(printf '%s' "${combined}" | grep -v '^$' | LC_ALL=C sort | uniq -d)" \
-     && [[ -n "${overlap}" ]]; then
-    fail "${flavour} (${lists}) names packages twice: ${overlap//$'\n'/ }"
-  else
-    pass "${flavour} lists (${lists}) do not overlap"
-  fi
-done
-
-# ---------------------------------------------------------------------------
-group "Containerfile"
-# ---------------------------------------------------------------------------
-readonly CONTAINERFILE=containers/dev/Containerfile
-
-if [[ -f "${CONTAINERFILE}" ]]; then
-  pass "${CONTAINERFILE} exists"
-
-  # Every version installed from outside dnf must be pinned, so a rebuild of
-  # an old commit produces the same image.
-  for arg in KUBECTL_VERSION ARGOCD_VERSION OT_VERSION TICRYPT_VERSION; do
-    if grep -qE "^ARG ${arg}=.+" "${CONTAINERFILE}"; then
-      pass "${arg} is pinned"
+  # Each image must stand on its own: a Containerfile, the package list it
+  # installs and a smoke test that proves the result.
+  for required in Containerfile packages.txt smoke.sh; do
+    if [[ -f "${dir}/${required}" ]]; then
+      pass "${image}/${required} exists"
     else
-      fail "${arg} is not pinned in ${CONTAINERFILE}"
+      fail "${image}/${required} is missing"
     fi
   done
 
-  if grep -qE '^ARG DNF_BASEURL=$' "${CONTAINERFILE}"; then
-    pass "DNF_BASEURL defaults to empty"
+  if [[ -x "${dir}/smoke.sh" ]]; then
+    pass "${image}/smoke.sh is executable"
   else
-    fail "ARG DNF_BASEURL must default to empty; a pinned mirror changes image contents"
+    fail "${image}/smoke.sh is not executable"
   fi
+
+  [[ -f "${dir}/packages.txt" ]] && check_sorted_list "${dir}/packages.txt" packages
+
+  # A standalone image cannot reach outside its own directory for build
+  # context, so nothing may COPY from a parent.
+  if [[ -f "${dir}/Containerfile" ]] \
+     && grep -qE '^\s*COPY\s+(--[^ ]+\s+)*\.\.' "${dir}/Containerfile"; then
+    fail "${image}/Containerfile copies from outside its own directory"
+  else
+    pass "${image} builds from its own directory alone"
+  fi
+
+  # Each image needs a workflow that builds it.
+  if grep -rqlF "images/${image}/" .github/workflows/ 2>/dev/null; then
+    pass "${image} is referenced by a workflow"
+  else
+    fail "${image} has no workflow under .github/workflows/"
+  fi
+done
+
+if [[ -f images/developer-platform-dev/extensions.txt ]]; then
+  check_sorted_list images/developer-platform-dev/extensions.txt extensions
+fi
+
+# ---------------------------------------------------------------------------
+group "Containerfiles"
+# ---------------------------------------------------------------------------
+for image in "${IMAGES[@]}"; do
+  containerfile="images/${image}/Containerfile"
+  [[ -f "${containerfile}" ]] || continue
+
+  # Every version installed from outside dnf must be pinned, so that a
+  # rebuild of an old commit produces the same image.
+  while read -r arg; do
+    if grep -qE "^ARG ${arg}=.+" "${containerfile}"; then
+      pass "${image}: ${arg} is pinned"
+    else
+      fail "${image}: ARG ${arg} is declared but not pinned"
+    fi
+  done < <(grep -oE '^ARG [A-Z0-9_]+_VERSION' "${containerfile}" | awk '{ print $2 }')
 
   # Upstream publishes no checksum file for tiCrypt Connect, so the pinned
-  # digest in the Containerfile is the only thing tying the build to a known
-  # artefact.
-  if grep -qE '^ARG TICRYPT_SHA256=[0-9a-f]{64}$' "${CONTAINERFILE}"; then
-    pass "TICRYPT_SHA256 is a full sha256"
-  else
-    fail "ARG TICRYPT_SHA256 must pin a 64-character sha256"
-  fi
-
-  if grep -qE '^ARG PROXY_CA_CERT=$' "${CONTAINERFILE}"; then
-    pass "PROXY_CA_CERT defaults to empty"
-  else
-    fail "ARG PROXY_CA_CERT must default to empty; no CA is baked into published images"
-  fi
-
-  if grep -qE '^ARG BASE_IMAGE=.*:[A-Za-z0-9._-]+$' "${CONTAINERFILE}"; then
-    pass "BASE_IMAGE carries an explicit tag"
-  else
-    fail "BASE_IMAGE must name an explicit tag, not a floating one"
-  fi
-
-  if grep -qE '^(FROM|ARG BASE_IMAGE=).*:latest' "${CONTAINERFILE}"; then
-    fail "${CONTAINERFILE} refers to a :latest tag"
-  else
-    pass "no :latest tags"
-  fi
-
-  if grep -q 'com.github.containers.toolbox="true"' "${CONTAINERFILE}"; then
-    pass "toolbx label is set"
-  else
-    fail "com.github.containers.toolbox=true label is missing; toolbx will refuse the image"
-  fi
-else
-  fail "${CONTAINERFILE} is missing"
-fi
-
-# The CI matrices are generated from flavours.conf; check they are valid JSON
-# and cover exactly the flavours declared there.
-if [[ -x containers/ci-matrix.sh ]]; then
-  for mode in build manifest; do
-    if matrix_json="$(containers/ci-matrix.sh "--${mode}" 2>/dev/null)" \
-       && printf '%s' "${matrix_json}" \
-          | python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; then
-      pass "ci-matrix.sh --${mode} emits valid JSON"
+  # digest is the only thing tying that build to a known artefact.
+  while read -r arg; do
+    if grep -qE "^ARG ${arg}=[0-9a-f]{64}$" "${containerfile}"; then
+      pass "${image}: ${arg} is a full sha256"
     else
-      fail "ci-matrix.sh --${mode} does not emit valid JSON"
-      containers/ci-matrix.sh "--${mode}" || true
+      fail "${image}: ARG ${arg} must pin a 64-character sha256"
+    fi
+  done < <(grep -oE '^ARG [A-Z0-9_]+_SHA256' "${containerfile}" | awk '{ print $2 }')
+
+  for arg in DNF_BASEURL PROXY_CA_CERT; do
+    if ! grep -qE "^ARG ${arg}" "${containerfile}"; then
       continue
     fi
-
-    covered="$(printf '%s' "${matrix_json}" \
-      | python3 -c 'import sys,json; print(" ".join(sorted({e["flavor"] for e in json.load(sys.stdin)["include"]})))')"
-    expected="$(printf '%s\n' "${FLAVOURS[@]}" | LC_ALL=C sort | tr '\n' ' ')"
-    if [[ "${covered} " == "${expected}" ]]; then
-      pass "ci-matrix.sh --${mode} covers every flavour"
+    if grep -qE "^ARG ${arg}=$" "${containerfile}"; then
+      pass "${image}: ${arg} defaults to empty"
     else
-      fail "ci-matrix.sh --${mode} covers '${covered}', flavours.conf declares '${expected% }'"
+      fail "${image}: ARG ${arg} must default to empty; it changes what is built"
     fi
   done
-else
-  fail "containers/ci-matrix.sh is missing or not executable"
-fi
 
-# Every flavour must be buildable from this checkout.
-if [[ -x containers/build.sh ]]; then
-  for flavour in "${FLAVOURS[@]}"; do
-    if containers/build.sh --flavor "${flavour}" --dry-run >/dev/null 2>&1; then
-      pass "containers/build.sh --flavor ${flavour} resolves"
-    else
-      # A missing engine is an environment problem, not a repository one.
-      if ! command -v podman >/dev/null 2>&1 \
+  if grep -qE '^ARG BASE_IMAGE=.*:[A-Za-z0-9._-]+$' "${containerfile}"; then
+    pass "${image}: BASE_IMAGE carries an explicit tag"
+  else
+    fail "${image}: BASE_IMAGE must name an explicit tag, not a floating one"
+  fi
+
+  if grep -qE '^(FROM|ARG BASE_IMAGE=).*:latest' "${containerfile}"; then
+    fail "${image}: Containerfile refers to a :latest tag"
+  else
+    pass "${image}: no :latest tags"
+  fi
+
+  if grep -q 'com.github.containers.toolbox="true"' "${containerfile}"; then
+    pass "${image}: toolbx label is set"
+  else
+    fail "${image}: com.github.containers.toolbox=true label is missing"
+  fi
+done
+
+# Every image must resolve through the build helper.
+if [[ -x scripts/build-image.sh ]]; then
+  for image in "${IMAGES[@]}"; do
+    if scripts/build-image.sh "${image}" --dry-run >/dev/null 2>&1; then
+      pass "scripts/build-image.sh ${image} resolves"
+    elif ! command -v podman >/dev/null 2>&1 \
          && ! command -v docker >/dev/null 2>&1; then
-        skip "containers/build.sh --flavor ${flavour} (no container engine)"
-      else
-        fail "containers/build.sh --flavor ${flavour} fails"
-        containers/build.sh --flavor "${flavour}" --dry-run || true
-      fi
+      skip "scripts/build-image.sh ${image} (no container engine)"
+    else
+      fail "scripts/build-image.sh ${image} fails"
+      scripts/build-image.sh "${image}" --dry-run || true
     fi
   done
 else
-  fail "containers/build.sh is missing or not executable"
+  fail "scripts/build-image.sh is missing or not executable"
 fi
 
 # ---------------------------------------------------------------------------

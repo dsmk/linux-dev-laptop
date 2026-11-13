@@ -1,30 +1,24 @@
 # linux-dev-laptop
 
-Configuration for a Fedora Silverblue developer laptop. The part that gets
-built and published is a set of container images: **toolbx** and
-**distrobox** images holding the development toolchain, and a **ticrypt**
-image packaging the tiCrypt Connect desktop client. Ansible then configures
-the host and creates containers from those images.
+Configuration for a Fedora Silverblue developer laptop. What gets built and
+published is a **collection of standalone container images**; Ansible then
+configures the host and creates containers from them.
 
 ## Repository map
 
 ```
-containers/           the images. Start here for anything image related.
-  flavours.conf       what a flavour is; the single source of truth
-  build.sh            the only supported way to build any flavour
-  ci-matrix.sh        turns flavours.conf into the CI build matrices
-  dev/Containerfile   shared by every flavour, driven by build args
-  packages/*.txt      what gets installed; one list per concern
-  README.md           flavours, build hosts, how to change what is installed
-tests/
-  smoke-container.sh  runs inside a built image; checks every tool is present
+images/               one directory per image. Start here for anything image related.
+  README.md           the images, how to build them, build hosts, adding one
+  developer-platform-dev/   the development environment (the large one)
+  ticrypt-connect/          the tiCrypt Connect desktop client
 scripts/
+  build-image.sh      optional helper; plain `podman build` also works
   validate.sh         every check that needs neither network nor a build
   dev-env-setup.sh    prepares a session and reports what it can actually do
 ansible/              host configuration (playbooks, group_vars, tasks)
 .yamllint             shared yamllint config, also used by ansible-lint
 .claude/settings.json permission allowlist + the SessionStart hook
-.github/workflows/    dev-image.yml builds+publishes; verify.yml runs validate
+.github/workflows/    one workflow per image, plus verify.yml
 *.yaml (repo root)    an older, non-OSTree Fedora playbook (site/target.yaml)
 winapp/               Windows VM image definition used by the WinApps work
 ```
@@ -34,55 +28,40 @@ repository root (`site.yaml`, `target.yaml`, `fedora-rpms.yaml`, …) are the
 earlier mutable-Fedora approach and are not wired into the Ansible playbooks;
 leave them alone unless asked.
 
-## The image flavours
+## Images are standalone
 
-`containers/flavours.conf` declares them. It is the single source of truth:
-`build.sh`, `scripts/validate.sh`, `tests/smoke-container.sh` and
-`.github/workflows/dev-image.yml` all read it, so **add a flavour there, not
-in four places**.
+Each directory under `images/` is a complete, independent image:
 
-| Flavour     | Published as                                | Lists                | Kind | Arch         |
-| ----------- | ------------------------------------------- | -------------------- | ---- | ------------ |
-| `toolbx`    | `ghcr.io/dsmk/developer-platform-dev`       | common + toolbx      | dev  | amd64, arm64 |
-| `distrobox` | `ghcr.io/dsmk/developer-platform-distrobox` | common + distrobox   | dev  | amd64, arm64 |
-| `ticrypt`   | `ghcr.io/dsmk/developer-platform-ticrypt`   | distrobox + ticrypt  | app  | amd64        |
+```
+images/<name>/
+  Containerfile    builds from this directory alone
+  packages.txt     what dnf installs
+  smoke.sh         run inside the built image; proves it works
+```
 
-Every flavour shares `containers/dev/Containerfile`, differing only by build
-args. **Do not fork the Containerfile per flavour** — that is exactly the
-drift this layout exists to prevent.
+and one workflow in `.github/workflows/` builds and publishes it. There is
+**no shared Containerfile, no flavour registry and no build matrix**. That is
+deliberate: an image is meant to be readable and buildable on its own, and
+`podman build images/<name>` is the whole story.
 
-`kind` decides whether the URL-installed developer tools go in:
+So: **do not factor shared pieces back out across images.** If two images
+need the same package, both list it. Duplication between images is the price
+of each one standing alone, and it is the price this repository has chosen.
 
-* `dev` — also installs VS Code, kubectl, argocd and ot.
-* `app` — the package lists and the flavour's own payload only. `ticrypt` is
-  an application container, so it builds on `distrobox.txt` rather than
-  `common.txt` and carries no developer toolchain.
+| Image                    | Published as                          | Arch         |
+| ------------------------ | ------------------------------------- | ------------ |
+| `developer-platform-dev` | `ghcr.io/dsmk/developer-platform-dev` | amd64, arm64 |
+| `ticrypt-connect`        | `ghcr.io/dsmk/ticrypt-connect`        | amd64        |
 
-The `toolbx` image deliberately keeps the historical name
-`developer-platform-dev`, because `ansible/group_vars/all.yml` and existing
-laptops already pull it.
+The published name is the directory name. `developer-platform-dev` is large
+on purpose — toolchain, language runtimes, VS Code, kubectl, argocd, ot — and
+serves both `toolbox create` and `distrobox create`, because it carries the
+toolbx label and the host-integration utilities distrobox needs.
+`ticrypt-connect` is the opposite: a minimal Fedora base plus one application
+and its runtime.
 
-On the host side, `ansible/silverblue.yml` always creates the toolbx container
-and creates the distrobox one only when `enable_distrobox` is true
-(`ansible/group_vars/all.yml`). Both image references live in that same file.
-The ticrypt container is not wired into Ansible; `containers/README.md` has
-the two `distrobox` commands that create it and export its launcher.
-
-### tiCrypt Connect
-
-`ticrypt` packages the client from <https://ticrypt.com/download>. Upstream
-publishes an unsigned x86_64 RPM and **no checksum file**, so
-`TICRYPT_SHA256` in the Containerfile is a digest taken from the downloaded
-artefact and is the only thing pinning the build. When bumping
-`TICRYPT_VERSION`, re-download over a trusted connection, record the new
-`sha256sum`, and update both. `validate.sh` checks the digest is present and
-well formed; it cannot check it is the right one.
-
-The RPM ships `/usr/share/applications/ticrypt-connect.desktop` and hicolor
-icons, which is what makes `distrobox-export --app ticrypt-connect` produce a
-working host launcher. `tests/smoke-container.sh` asserts the binary, the
-desktop entry, the icon and the entry's `Type`/`Exec`/`Icon` lines, because
-an image that lost any of them would export a broken launcher silently.
+`images/README.md` has the details, including the VS Code extension helper
+and the tiCrypt checksum pinning.
 
 ## Working here
 
@@ -93,7 +72,7 @@ scripts/dev-env-setup.sh
 ```
 
 It starts a container engine if one can be started, and prints which of the
-hosts a build needs are actually reachable.
+URLs a build fetches are actually reachable.
 
 Then, after any change:
 
@@ -101,124 +80,103 @@ Then, after any change:
 scripts/validate.sh
 ```
 
-That is the same command CI runs. It needs no network and no container engine,
-and covers: shell syntax and shellcheck, package manifest sorting / duplicates
-/ cross-list overlap, Containerfile version pinning and the toolbx label,
-YAML and JSON parsing, Ansible syntax-check and ansible-lint. Optional linters
-that are not installed are reported as `SKIP` rather than failing;
-`scripts/validate.sh --install-tools` installs them.
+That is the same command CI runs. It needs no network and no container
+engine, and covers: shell syntax and shellcheck, each image's required files,
+package and extension lists sorted and duplicate-free, Containerfile version
+and checksum pinning, the toolbx label, that no image copies from outside its
+own directory, that every image has a workflow, YAML and JSON parsing, and
+Ansible syntax-check plus ansible-lint. Missing optional linters are reported
+as `SKIP`; `scripts/validate.sh --install-tools` installs them.
 
-To build an image:
+To build:
 
 ```bash
-containers/build.sh --flavor toolbx --smoke
+scripts/build-image.sh developer-platform-dev --smoke
 ```
 
 ```bash
-containers/build.sh --flavor distrobox --smoke
-```
-
-```bash
-containers/build.sh --flavor ticrypt --smoke
+scripts/build-image.sh ticrypt-connect --smoke
 ```
 
 ### In a Claude Code cloud (web) session
 
 A cloud session ships the `docker` client with no running daemon.
-`scripts/dev-env-setup.sh` starts `dockerd` and `containers/build.sh` picks it
-up, so builds work **if** the environment's network policy allows the hosts
-listed in `containers/README.md`.
-
-A restricted policy typically blocks `*.fedoraproject.org`,
-`*.fedorainfracloud.org`, `packages.redhat.com` and `galaxy.ansible.com`,
-which means:
-
-* image builds fail partway through `dnf`,
-* `ansible-galaxy collection install` fails, so the `community.general`
-  modules do not resolve and `ansible/silverblue.yml` cannot be
-  syntax-checked locally.
-
-Two further traps, both documented in `containers/README.md`:
+`scripts/dev-env-setup.sh` starts `dockerd` and the build helper picks it up,
+so builds work **if** the network policy allows the hosts in
+`images/README.md`. Two traps, both documented there:
 
 * dnf resolves the metalink to arbitrary third-party mirrors, so a named-host
   allowlist never covers them. Pass
-  `--dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux` to pin dnf to
-  one host. This is a local build aid only: it also disables
-  `fedora-cisco-openh264`, so it changes image contents and must never be used
-  for a published build.
-* The build needs the container to reach the proxy, which the default bridge
-  network cannot do. Pass the proxy through:
+  `--dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux`. Local build
+  aid only: it also disables `fedora-cisco-openh264`, so it changes image
+  contents and must never be used for a published build.
+* The build container must reach the proxy, which the default bridge network
+  cannot, and must trust its CA:
 
   ```bash
   EXTRA_BUILD_ARGS="--network=host --build-arg https_proxy=$HTTPS_PROXY --build-arg HTTPS_PROXY=$HTTPS_PROXY" \
-    containers/build.sh --flavor toolbx --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux --smoke
+  scripts/build-image.sh developer-platform-dev --smoke \
+    --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux \
+    --proxy-ca /root/.ccr/agent-proxy-ca.crt
   ```
 
-Neither is a problem with this repository. When a host is denied: say which
-one, finish everything that does not depend on it — `scripts/validate.sh` is
-fully offline — and let `.github/workflows/dev-image.yml` do the build. Do not
-fake a build result, and do not disable TLS verification or unset
-`HTTPS_PROXY` to get around the proxy.
+When a host is denied: say which one, finish everything that does not depend
+on it — `scripts/validate.sh` is fully offline — and let the image's workflow
+do the build. Do not fake a build result, and do not disable TLS verification
+or unset `HTTPS_PROXY` to get around the proxy.
 
 To widen access the repository owner edits **Network access** in the cloud
-environment's settings (title bar → environment menu → Edit) and adds those
-hosts under **Allowed domains**:
+environment's settings (title bar → environment menu → Edit):
 <https://code.claude.com/docs/en/cloud-environments#network-access>
 
 ## Conventions
 
 * **Pin everything.** Base images carry an explicit tag; tools fetched from a
-  URL have an `ARG <TOOL>_VERSION` and a checksum check. No `:latest`.
-  `scripts/validate.sh` enforces this.
+  URL have an `ARG <TOOL>_VERSION`, and a checksum — upstream's where there is
+  one, otherwise an `ARG <TOOL>_SHA256` recorded from the artefact. No
+  `:latest`. `scripts/validate.sh` enforces this.
 * **Package lists are sorted** with `LC_ALL=C sort`, one name per line, no
-  duplicates, and nothing in a flavour list that is already in `common.txt`.
+  duplicates.
 * **Nothing that needs a Red Hat subscription**, because the images are
   published publicly to GHCR.
 * **No credentials in the images or in git.** toolbx and distrobox do user
   setup at container-creation time; secrets belong in Ansible Vault. The
   `winapps_*_password` variables in `ansible/group_vars/all.yml` are
   intentionally empty.
-* **Claude Code is not baked into the image.** It releases far more often than
-  the image, so it is installed into the developer's home directory and
+* **Claude Code is not baked into any image.** It releases far more often
+  than they do, so it is installed into the developer's home directory and
   updates itself there. Do not add a `CLAUDE_CODE_VERSION` build arg or an
-  `npm install -g @anthropic-ai/claude-code` layer back without being asked;
-  the comment in `containers/dev/Containerfile` records the decision.
-* **`ot` is amd64-only upstream.** The Containerfile installs it on `amd64`
-  and skips it elsewhere, and the smoke test skips it on non-x86_64. If
-  upstream starts publishing arm64 builds, drop both conditionals.
-* **A new tool in the image needs a new check** in `tests/smoke-container.sh`.
+  `npm install -g @anthropic-ai/claude-code` layer without being asked.
+* **Anything in `$HOME` cannot be baked in.** toolbx and distrobox mount the
+  host's home directory over the image's, which is why VS Code extensions
+  ship as a list plus `dev-install-extensions` rather than as a layer.
+* **`ot` is amd64-only upstream.** `developer-platform-dev` installs it on
+  amd64 and skips it elsewhere, and its smoke test skips it on non-x86_64.
+* **A new tool in an image needs a new check** in that image's `smoke.sh`.
   An image that silently lost a binary should fail CI.
 
 ## Common tasks
 
-**Add a tool to both flavours** → add the package to
-`containers/packages/common.txt` (sorted), add the command to the shared
-`require` list in `tests/smoke-container.sh`, run `scripts/validate.sh`.
+**Add a tool to an image** → add the package to `images/<name>/packages.txt`
+(sorted), add the command to that image's `smoke.sh`, run
+`scripts/validate.sh`.
 
-**Add a tool to one flavour only** → same, but use
-`containers/packages/<flavour>.txt` and the flavour's `case` branch in the
-smoke test.
+**Bump a pinned version** → edit the `ARG` near the top of that image's
+`Containerfile`. Where the checksum is `ARG <TOOL>_SHA256` rather than one
+fetched from upstream, re-download over a trusted connection and re-record it.
 
-**Bump a pinned version** → edit the `ARG` at the top of
-`containers/dev/Containerfile`. The checksum logic downloads the matching
-checksum file, so nothing else needs updating.
-
-**Add a flavour** → add a line to `containers/flavours.conf` and a matching
-`containers/packages/<name>.txt`. Everything else reads that file, so nothing
-else needs editing unless the flavour installs something from a URL, which
-goes in `containers/dev/Containerfile` with a pinned `ARG <TOOL>_VERSION` and
-a checksum, plus a check in `tests/smoke-container.sh`.
+**Add an image** → create `images/<name>/` with a `Containerfile`,
+`packages.txt` and an executable `smoke.sh`, then copy one of the workflows
+and change the paths and `IMAGE_NAME`. `scripts/validate.sh` discovers the
+directory by itself and reports what is missing.
 
 ## CI
 
 * `.github/workflows/verify.yml` — runs `scripts/validate.sh` on every push
   and pull request.
-* `.github/workflows/dev-image.yml` — a `matrix` job runs
-  `containers/ci-matrix.sh`, so the workflow builds whatever `flavours.conf`
-  declares without listing the flavours itself. Each image is built on a
-  native runner and smoke tested; on `main` it publishes per-arch tags plus a
-  multi-arch manifest per flavour. Pull requests build and smoke test
-  everything and publish nothing.
+* One workflow per image, named after it, triggered only by changes under
+  that image's directory. A pull request builds and smoke tests; a push to
+  `main` publishes to GHCR.
 
 ## Git
 

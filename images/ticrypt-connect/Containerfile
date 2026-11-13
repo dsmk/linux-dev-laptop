@@ -1,0 +1,87 @@
+# ticrypt-connect -- the tiCrypt Connect desktop client, and nothing else.
+#
+# A standalone image: `podman build images/ticrypt-connect` is all it takes.
+# It starts from the minimal Fedora base rather than fedora-toolbox, and
+# installs only what distrobox needs inside a container plus what a GTK +
+# WebKit application needs to run.
+#
+#   distrobox create --name ticrypt --image ghcr.io/dsmk/ticrypt-connect:main
+#   distrobox enter ticrypt -- distrobox-export --app ticrypt-connect
+#
+# The second command puts "tiCrypt Connect" on the host application menu. It
+# works because the RPM installs a .desktop entry and hicolor icons, and this
+# image adds the icon themes and fonts they need to render.
+
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora:44
+FROM ${BASE_IMAGE}
+
+# Supplied by the builder, follows --platform.
+ARG TARGETARCH
+
+# tiCrypt Connect. Tera Insights publishes no checksum file and does not sign
+# the RPM, so the digest below was taken from the downloaded artefact and is
+# what pins this build. Re-record it when bumping the version, downloading
+# over a trusted connection:
+#   curl -sSLO https://storage.googleapis.com/ticrypt/connect/stable/<v>/tiCryptConnect-<v>.x86_64.rpm
+#   sha256sum tiCryptConnect-<v>.x86_64.rpm
+ARG TICRYPT_VERSION=4.1.4
+ARG TICRYPT_SHA256=63e738f14decef36a7216d1ab09d8ae80080d1f49245736f965a9d5de3940875
+
+# Both optional and empty by default; see images/README.md.
+ARG DNF_BASEURL=
+ARG PROXY_CA_CERT=
+
+USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN if [[ -n "${PROXY_CA_CERT}" ]]; then \
+      printf '%s\n' "${PROXY_CA_CERT}" \
+        > /etc/pki/ca-trust/source/anchors/build-proxy.crt \
+      && update-ca-trust extract; \
+    fi \
+    && if [[ -n "${DNF_BASEURL}" ]]; then \
+         dnf config-manager setopt \
+           fedora.metalink= \
+           "fedora.baseurl=${DNF_BASEURL}/releases/\$releasever/Everything/\$basearch/os/" \
+           updates.metalink= \
+           "updates.baseurl=${DNF_BASEURL}/updates/\$releasever/Everything/\$basearch/" \
+           fedora-cisco-openh264.enabled=0; \
+       fi
+
+COPY packages.txt /usr/share/ticrypt-connect/packages.txt
+
+RUN mapfile -t packages < <( \
+      sed -e 's/#.*//' -e 's/[[:space:]]//g' \
+          /usr/share/ticrypt-connect/packages.txt \
+      | grep -v '^$' ) \
+    && dnf install -y --setopt=install_weak_deps=False "${packages[@]}" \
+    && dnf clean all
+
+# Upstream does not sign the RPM, so localpkg_gpgcheck is off for this one
+# transaction and the download is pinned by the SHA-256 above instead. The
+# package is x86_64 only, so the workflow builds amd64 alone; the guard keeps
+# a hand-run arm64 build honest.
+ARG TICRYPT_RPM=https://storage.googleapis.com/ticrypt/connect/stable/${TICRYPT_VERSION}/tiCryptConnect-${TICRYPT_VERSION}.x86_64.rpm
+RUN if [[ "${TARGETARCH}" != "amd64" ]]; then \
+      echo "tiCrypt Connect publishes no ${TARGETARCH} build" >&2; exit 1; \
+    fi \
+    && curl -sSL --fail-with-body -o /var/tmp/ticrypt.rpm "${TICRYPT_RPM}" \
+    && printf '%s  %s\n' "${TICRYPT_SHA256}" /var/tmp/ticrypt.rpm \
+       | sha256sum --check - \
+    && dnf install -y --setopt=localpkg_gpgcheck=0 /var/tmp/ticrypt.rpm \
+    && dnf clean all \
+    && rm /var/tmp/ticrypt.rpm \
+    && test -x /usr/bin/ticrypt-connect \
+    && test -f /usr/share/applications/ticrypt-connect.desktop
+
+# distrobox ignores this label; it is set so `toolbox create` accepts the
+# image too.
+LABEL com.github.containers.toolbox="true" \
+      org.opencontainers.image.title="ticrypt-connect" \
+      org.opencontainers.image.description="tiCrypt Connect desktop client for distrobox" \
+      org.opencontainers.image.source="https://github.com/dsmk/linux-dev-laptop" \
+      org.opencontainers.image.version="${TICRYPT_VERSION}" \
+      org.opencontainers.image.licenses="MIT"
+
+# distrobox performs user setup when the container is created. Do not bake
+# personal authentication into this image.
