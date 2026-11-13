@@ -67,20 +67,62 @@ duplicates across lists and the presence of the version pins.
 A build reaches out to these; a restricted network policy that blocks any one
 of them fails the build partway through:
 
-| Host                                 | For                            |
-| ------------------------------------ | ------------------------------ |
-| `registry.fedoraproject.org`         | the `fedora-toolbox` base image |
-| `mirrors.fedoraproject.org`          | dnf metalink                   |
-| `download.fedoraproject.org`         | dnf packages                   |
-| `copr.fedorainfracloud.org`          | starship COPR metadata         |
-| `download.copr.fedorainfracloud.org` | starship COPR packages         |
-| `packages.microsoft.com`             | VS Code                        |
-| `dl.k8s.io`                          | kubectl                        |
-| `github.com`                         | argocd, ot                     |
-| `objects.githubusercontent.com`      | GitHub release assets          |
+| Host                                   | For                             |
+| -------------------------------------- | ------------------------------- |
+| `registry.fedoraproject.org`           | the `fedora-toolbox` base image |
+| `mirrors.fedoraproject.org`            | dnf metalink                    |
+| Fedora mirrors                         | dnf packages (chosen by metalink, so not a fixed host) |
+| `copr.fedorainfracloud.org`            | starship COPR metadata          |
+| `download.copr.fedorainfracloud.org`   | starship COPR, redirects to the next row |
+| `packages.redhat.com`                  | where COPR content actually lives |
+| `packages.microsoft.com`               | VS Code                         |
+| `dl.k8s.io`                            | kubectl                         |
+| `github.com`                           | argocd, ot                      |
+| `release-assets.githubusercontent.com` | GitHub release assets           |
+| `galaxy.ansible.com`                   | Ansible collections, for the checks |
+
+`download.copr.fedorainfracloud.org` serves a 301 to `packages.redhat.com`
+for the actual repository metadata, so allowing only the first of the two is
+not enough: the build gets as far as `No match for argument: starship` and
+stops. `starship` is not in the Fedora repositories, so the COPR is required.
+
+Worse, dnf resolves `mirrors.fedoraproject.org` to arbitrary third-party
+mirrors, so a named-host allowlist cannot cover them. For that case pass
+`--dnf-baseurl`, which pins dnf to one mirror:
+
+```bash
+containers/build.sh --flavor toolbx \
+  --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux
+```
+
+That also disables `fedora-cisco-openh264`, whose RPMs are served over plain
+**HTTP** from `ciscobinary.openh264.org` and so cannot traverse an HTTPS
+proxy at all; Fedora's own `noopenh264` satisfies the dependency instead.
+Because that changes what ends up in the image, published builds leave
+`DNF_BASEURL` unset — `scripts/validate.sh` checks the default stays empty.
+
+Two more things a proxied environment needs. The build container has to be
+able to reach the proxy, which the default bridge network cannot, and it has
+to trust the proxy's CA if that proxy re-terminates TLS — without which the
+GitHub downloads fail with `curl: (60)`:
+
+```bash
+EXTRA_BUILD_ARGS="--network=host --build-arg https_proxy=$HTTPS_PROXY --build-arg HTTPS_PROXY=$HTTPS_PROXY" \
+containers/build.sh --flavor toolbx --smoke \
+  --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux \
+  --proxy-ca /root/.ccr/agent-proxy-ca.crt
+```
+
+`--proxy-ca` takes the proxy's own CA certificate, not a system trust bundle:
+the value travels as a build argument, and a full bundle overflows the
+engine's argument list. `build.sh` rejects a file that is too large, that
+holds a private key, or that it cannot read. `PROXY_CA_CERT` defaults to
+empty, so published images trust nothing extra.
 
 `scripts/dev-env-setup.sh` reports which of these the current session can
-reach. When `registry.fedoraproject.org` is unreachable but Docker Hub is,
+reach, following redirects so that this particular trap is caught.
+
+When `registry.fedoraproject.org` is unreachable but Docker Hub is,
 `--base docker.io/library/fedora:44` gets a build started, at the cost of
 losing the toolbox base layer — use it for experiments, not for anything
 published.

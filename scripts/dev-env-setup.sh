@@ -15,20 +15,25 @@ set -uo pipefail
 
 readonly DOCKERD_LOG="${TMPDIR:-/tmp}/dockerd-dev-env.log"
 
-# Hosts an image build (or the Ansible checks) has to reach. A restricted
-# network policy that blocks any of these turns a build into a confusing
-# mid-build failure, so they are named here and in CLAUDE.md.
-readonly BUILD_HOSTS=(
-  registry.fedoraproject.org          # fedora-toolbox base image
-  mirrors.fedoraproject.org           # dnf metalink
-  download.fedoraproject.org          # dnf packages
-  copr.fedorainfracloud.org           # starship COPR metadata
-  download.copr.fedorainfracloud.org  # starship COPR packages
-  packages.microsoft.com              # VS Code
-  dl.k8s.io                           # kubectl
-  github.com                          # argocd, ot
-  objects.githubusercontent.com       # GitHub release assets
-  galaxy.ansible.com                  # ansible-galaxy collections
+# What an image build has to reach, as "label|probe URL" pairs.
+#
+# Root URLs are not good enough: download.copr.fedorainfracloud.org answers
+# 200 on / but 301s repository content to packages.redhat.com, so a root-only
+# probe calls a blocked repository reachable. Each entry therefore probes a
+# URL the build actually fetches, with redirects followed, and is labelled
+# with the host that has to be allowed.
+#
+# This is a heuristic, not a guarantee: dnf resolves Fedora mirrors through
+# the metalink, so the mirror it eventually picks is not a fixed host.
+readonly BUILD_PROBES=(
+  "registry.fedoraproject.org|https://registry.fedoraproject.org/v2/"
+  "mirrors.fedoraproject.org|https://mirrors.fedoraproject.org/metalink?repo=fedora-44&arch=x86_64"
+  "copr.fedorainfracloud.org|https://copr.fedorainfracloud.org/api_3/"
+  "packages.redhat.com (COPR content)|https://download.copr.fedorainfracloud.org/results/atim/starship/fedora-44-x86_64/repodata/repomd.xml"
+  "packages.microsoft.com|https://packages.microsoft.com/yumrepos/vscode/repodata/repomd.xml"
+  "dl.k8s.io|https://dl.k8s.io/release/stable.txt"
+  "release-assets.githubusercontent.com|https://github.com/argoproj/argo-cd/releases/download/v3.5.4/cli_checksums.txt"
+  "galaxy.ansible.com|https://galaxy.ansible.com/api/"
 )
 
 mode=report
@@ -86,30 +91,34 @@ if ! detect_engine; then
   fi
 fi
 
-# Probed in parallel: this runs as a SessionStart hook, so a serial sweep of
-# ten hosts would visibly delay the start of every session.
+# Probed in parallel: this runs as a SessionStart hook, so a serial sweep
+# would visibly delay the start of every session.
 blocked=()
 if command -v curl >/dev/null 2>&1; then
   probe_dir="$(mktemp -d)"
   trap 'rm -rf "${probe_dir}"' EXIT
 
-  for host in "${BUILD_HOSTS[@]}"; do
+  index=0
+  for probe in "${BUILD_PROBES[@]}"; do
     (
-      # Any HTTP answer means the host is reachable; only a transport failure
-      # or a proxy policy denial counts as blocked. curl writes 000 and exits
-      # non-zero when a CONNECT is refused, so the exit status has to be
-      # captured outside the substitution.
-      code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 \
-                "https://${host}/" 2>/dev/null)" || code="000"
+      # Any HTTP answer means the resource is reachable; only a transport
+      # failure or a proxy policy denial counts as blocked. curl writes 000
+      # and exits non-zero when a CONNECT is refused, so the exit status has
+      # to be captured outside the substitution.
+      code="$(curl -sSL -o /dev/null -w '%{http_code}' --max-time 10 \
+                "${probe#*|}" 2>/dev/null)" || code="000"
       case "${code}" in
-        000|403|407) : >"${probe_dir}/${host}" ;;
+        000|403|407) : >"${probe_dir}/${index}" ;;
       esac
     ) &
+    index=$(( index + 1 ))
   done
   wait
 
-  for host in "${BUILD_HOSTS[@]}"; do
-    [[ -e "${probe_dir}/${host}" ]] && blocked+=("${host}")
+  index=0
+  for probe in "${BUILD_PROBES[@]}"; do
+    [[ -e "${probe_dir}/${index}" ]] && blocked+=("${probe%%|*}")
+    index=$(( index + 1 ))
   done
 fi
 
@@ -126,13 +135,13 @@ summary() {
   esac
 
   if [[ "${#blocked[@]}" -gt 0 ]]; then
-    printf 'Blocked build hosts (%d): %s\n' \
-      "${#blocked[@]}" "${blocked[*]}"
+    printf 'Blocked build hosts (%d):\n' "${#blocked[@]}"
+    printf '  - %s\n' "${blocked[@]}"
     printf 'An image build will fail partway through until the environment\n'
     printf "network policy allows these. Everything in scripts/validate.sh\n"
     printf 'still works offline.\n'
   else
-    printf 'All hosts an image build needs are reachable.\n'
+    printf 'Every URL an image build fetches is reachable.\n'
   fi
 
   printf 'Validate with: scripts/validate.sh\n'

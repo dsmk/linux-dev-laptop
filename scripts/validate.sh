@@ -142,6 +142,18 @@ if [[ -f "${CONTAINERFILE}" ]]; then
     fi
   done
 
+  if grep -qE '^ARG DNF_BASEURL=$' "${CONTAINERFILE}"; then
+    pass "DNF_BASEURL defaults to empty"
+  else
+    fail "ARG DNF_BASEURL must default to empty; a pinned mirror changes image contents"
+  fi
+
+  if grep -qE '^ARG PROXY_CA_CERT=$' "${CONTAINERFILE}"; then
+    pass "PROXY_CA_CERT defaults to empty"
+  else
+    fail "ARG PROXY_CA_CERT must default to empty; no CA is baked into published images"
+  fi
+
   if grep -qE '^ARG BASE_IMAGE=.*:[A-Za-z0-9._-]+$' "${CONTAINERFILE}"; then
     pass "BASE_IMAGE carries an explicit tag"
   else

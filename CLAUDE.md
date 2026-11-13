@@ -93,18 +93,35 @@ A cloud session ships the `docker` client with no running daemon.
 up, so builds work **if** the environment's network policy allows the hosts
 listed in `containers/README.md`.
 
-By default that policy blocks `*.fedoraproject.org`,
-`*.fedorainfracloud.org` and `galaxy.ansible.com`, which means:
+A restricted policy typically blocks `*.fedoraproject.org`,
+`*.fedorainfracloud.org`, `packages.redhat.com` and `galaxy.ansible.com`,
+which means:
 
 * image builds fail partway through `dnf`,
 * `ansible-galaxy collection install` fails, so the `community.general`
   modules do not resolve and `ansible/silverblue.yml` cannot be
   syntax-checked locally.
 
-Neither is a problem with this repository. When that happens: say which host
-was denied, finish everything that does not depend on it — `scripts/validate.sh`
-is fully offline — and let `.github/workflows/dev-image.yml` do the build. Do
-not fake a build result, and do not disable TLS verification or unset
+Two further traps, both documented in `containers/README.md`:
+
+* dnf resolves the metalink to arbitrary third-party mirrors, so a named-host
+  allowlist never covers them. Pass
+  `--dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux` to pin dnf to
+  one host. This is a local build aid only: it also disables
+  `fedora-cisco-openh264`, so it changes image contents and must never be used
+  for a published build.
+* The build needs the container to reach the proxy, which the default bridge
+  network cannot do. Pass the proxy through:
+
+  ```bash
+  EXTRA_BUILD_ARGS="--network=host --build-arg https_proxy=$HTTPS_PROXY --build-arg HTTPS_PROXY=$HTTPS_PROXY" \
+    containers/build.sh --flavor toolbx --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux --smoke
+  ```
+
+Neither is a problem with this repository. When a host is denied: say which
+one, finish everything that does not depend on it — `scripts/validate.sh` is
+fully offline — and let `.github/workflows/dev-image.yml` do the build. Do not
+fake a build result, and do not disable TLS verification or unset
 `HTTPS_PROXY` to get around the proxy.
 
 To widen access the repository owner edits **Network access** in the cloud

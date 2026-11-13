@@ -31,8 +31,48 @@ ARG KUBECTL_VERSION=v1.37.1
 ARG ARGOCD_VERSION=v3.5.4
 ARG OT_VERSION=v0.16.0
 
+# Optional, empty by default: pin dnf to a single Fedora mirror instead of the
+# metalink. Only set this when building behind a network policy that allows
+# named hosts, because the metalink hands dnf arbitrary third-party mirrors
+# that such a policy will deny:
+#
+#   containers/build.sh --dnf-baseurl https://dl.fedoraproject.org/pub/fedora/linux
+#
+# It also disables the fedora-cisco-openh264 repository, whose packages are
+# served over plain HTTP from ciscobinary.openh264.org and cannot go through
+# an HTTPS proxy. Fedora's own `noopenh264` then satisfies the dependency.
+# That is a real difference in image contents, so published images are built
+# with this UNSET.
+ARG DNF_BASEURL=
+
+# Optional, empty by default: the PEM text of an extra CA to trust during the
+# build. Needed when building behind a TLS-terminating proxy, which otherwise
+# fails the downloads below with curl exit 60. Pass a file with
+# `containers/build.sh --proxy-ca FILE`.
+#
+# This is a CA certificate, never a private key: build args are recorded in
+# the image history, so nothing secret may be passed here.
+ARG PROXY_CA_CERT=
+
 USER root
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN if [[ -n "${PROXY_CA_CERT}" ]]; then \
+      printf '%s\n' "${PROXY_CA_CERT}" \
+        > /etc/pki/ca-trust/source/anchors/build-proxy.crt \
+      && update-ca-trust extract \
+      && echo "trusting build proxy CA"; \
+    fi
+
+RUN if [[ -n "${DNF_BASEURL}" ]]; then \
+      dnf config-manager setopt \
+        fedora.metalink= \
+        "fedora.baseurl=${DNF_BASEURL}/releases/\$releasever/Everything/\$basearch/os/" \
+        updates.metalink= \
+        "updates.baseurl=${DNF_BASEURL}/updates/\$releasever/Everything/\$basearch/" \
+        fedora-cisco-openh264.enabled=0; \
+      echo "dnf pinned to ${DNF_BASEURL}; fedora-cisco-openh264 disabled"; \
+    fi
 
 COPY packages/ /usr/share/developer-platform/packages/
 

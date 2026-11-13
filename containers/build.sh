@@ -51,6 +51,11 @@ Options:
   --tag REF         full image reference to tag; default
                     localhost/<image>:dev
   --base IMAGE      override the base image for this flavour
+  --dnf-baseurl URL pin dnf to one Fedora mirror instead of the metalink,
+                    for building behind a restrictive network policy. Changes
+                    image contents (see the Containerfile); not for publishing
+  --proxy-ca FILE   PEM file of a CA to trust during the build, for a
+                    TLS-terminating proxy. A certificate only, never a key
   --engine NAME     podman | docker; default is whichever is installed
   --smoke           run tests/smoke-container.sh against the built image
   --push            push the tag after a successful build
@@ -59,6 +64,8 @@ Options:
 
 Environment:
   BASE_IMAGE        same as --base
+  DNF_BASEURL       same as --dnf-baseurl
+  PROXY_CA          same as --proxy-ca
   EXTRA_BUILD_ARGS  extra words appended to the engine's build command, e.g.
                     EXTRA_BUILD_ARGS='--network=host --build-arg https_proxy=...'
 USAGE
@@ -68,6 +75,8 @@ flavor=toolbx
 arch=""
 tag=""
 base="${BASE_IMAGE:-}"
+dnf_baseurl="${DNF_BASEURL:-}"
+proxy_ca="${PROXY_CA:-}"
 engine=""
 smoke=false
 push=false
@@ -79,6 +88,8 @@ while [[ $# -gt 0 ]]; do
     --arch)    arch="${2:?--arch needs a value}"; shift 2 ;;
     --tag)     tag="${2:?--tag needs a value}"; shift 2 ;;
     --base)    base="${2:?--base needs a value}"; shift 2 ;;
+    --dnf-baseurl) dnf_baseurl="${2:?--dnf-baseurl needs a value}"; shift 2 ;;
+    --proxy-ca) proxy_ca="${2:?--proxy-ca needs a value}"; shift 2 ;;
     --engine)  engine="${2:?--engine needs a value}"; shift 2 ;;
     --smoke)   smoke=true; shift ;;
     --push)    push=true; shift ;;
@@ -140,6 +151,32 @@ build=(
   --tag "${tag}"
 )
 
+if [[ -n "${dnf_baseurl}" ]]; then
+  build+=(--build-arg "DNF_BASEURL=${dnf_baseurl}")
+fi
+
+if [[ -n "${proxy_ca}" ]]; then
+  if [[ ! -r "${proxy_ca}" ]]; then
+    echo "cannot read --proxy-ca file: ${proxy_ca}" >&2
+    exit 2
+  fi
+  if grep -qi 'PRIVATE KEY' "${proxy_ca}"; then
+    echo "--proxy-ca must be a certificate, not a private key: ${proxy_ca}" >&2
+    exit 2
+  fi
+  # The value is passed as a build arg, so a full system trust bundle
+  # overflows the engine's argument list with an unhelpful "Argument list too
+  # long". Only the proxy's own CA is needed.
+  ca_bytes="$(wc -c < "${proxy_ca}")"
+  ca_count="$(grep -c 'BEGIN CERTIFICATE' "${proxy_ca}" || true)"
+  if (( ca_bytes > 32768 )); then
+    echo "--proxy-ca is ${ca_bytes} bytes holding ${ca_count} certificates;" >&2
+    echo "pass only the proxy's own CA certificate, not a full trust bundle" >&2
+    exit 2
+  fi
+  build+=(--build-arg "PROXY_CA_CERT=$(cat "${proxy_ca}")")
+fi
+
 if [[ -n "${EXTRA_BUILD_ARGS:-}" ]]; then
   # Word splitting is intended here: EXTRA_BUILD_ARGS is a list of flags.
   # shellcheck disable=SC2206
@@ -153,6 +190,12 @@ printf 'base    : %s\n' "${base}"
 printf 'arch    : %s\n' "${arch}"
 printf 'engine  : %s\n' "${engine}"
 printf 'tag     : %s\n' "${tag}"
+if [[ -n "${dnf_baseurl}" ]]; then
+  printf 'dnf     : pinned to %s (not for publishing)\n' "${dnf_baseurl}"
+fi
+if [[ -n "${proxy_ca}" ]]; then
+  printf 'proxy CA: %s\n' "${proxy_ca}"
+fi
 printf 'command : %s\n' "${build[*]}"
 
 if [[ "${dry_run}" == true ]]; then
