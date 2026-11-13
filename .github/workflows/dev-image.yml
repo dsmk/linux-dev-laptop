@@ -1,16 +1,25 @@
-name: Build development image
+---
+name: Build development images
+
+# Builds both image flavours for both architectures:
+#
+#   toolbx     -> ghcr.io/<owner>/developer-platform-dev
+#   distrobox  -> ghcr.io/<owner>/developer-platform-distrobox
+#
+# Everything goes through containers/build.sh so that a local build and a CI
+# build take exactly the same path.
 
 on:
   pull_request:
     paths:
-      - containers/dev/**
-      - tests/smoke-dev-container.sh
+      - containers/**
+      - tests/**
       - .github/workflows/dev-image.yml
   push:
     branches: [main]
     paths:
-      - containers/dev/**
-      - tests/smoke-dev-container.sh
+      - containers/**
+      - tests/**
       - .github/workflows/dev-image.yml
   workflow_dispatch:
 
@@ -21,25 +30,33 @@ concurrency:
   group: dev-image-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  # Kept in one place so the build and manifest jobs agree.
-  IMAGE_NAME: developer-platform-dev
-
 jobs:
   build:
     # One native runner per architecture. Emulating aarch64 would make the
-    # dnf and npm steps unreasonably slow, and free arm64 runners are
-    # available to public repositories.
+    # dnf step unreasonably slow, and free arm64 runners are available to
+    # public repositories.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - flavor: toolbx
+            image: developer-platform-dev
+            arch: amd64
             runner: ubuntu-24.04
-          - arch: arm64
+          - flavor: toolbx
+            image: developer-platform-dev
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - flavor: distrobox
+            image: developer-platform-distrobox
+            arch: amd64
+            runner: ubuntu-24.04
+          - flavor: distrobox
+            image: developer-platform-distrobox
+            arch: arm64
             runner: ubuntu-24.04-arm
 
-    name: build (${{ matrix.arch }})
+    name: build (${{ matrix.flavor }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
 
     permissions:
@@ -49,11 +66,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      #- name: Require a pinned Claude Code version
-      #  env:
-      #    CLAUDE_VERSION: ${{ vars.CLAUDE_CODE_VERSION }}
-      #  run: test -n "$CLAUDE_VERSION"
-
       - name: Install Podman
         run: |
           sudo apt-get update
@@ -62,25 +74,18 @@ jobs:
       - name: Set image name
         run: |
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE=ghcr.io/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${OWNER}/${{ matrix.image }}" >> "$GITHUB_ENV"
 
-      - name: Build
+      # Build and smoke test in one step: build.sh checks the toolbx label on
+      # the result and then runs tests/smoke-container.sh inside it.
+      - name: Build and smoke test
         run: |
-          podman build \
-            --platform "linux/${{ matrix.arch }}" \
+          containers/build.sh \
+            --engine podman \
+            --flavor "${{ matrix.flavor }}" \
+            --arch "${{ matrix.arch }}" \
             --tag "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}" \
-            containers/dev
-
-      #  env:
-      #    CLAUDE_VERSION: ${{ vars.CLAUDE_CODE_VERSION }}
-      #      --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_VERSION" \
-
-      - name: Smoke test
-        run: |
-          podman run --rm \
-            --volume "$PWD/tests:/tests:ro" \
-            "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}" \
-            bash /tests/smoke-dev-container.sh
+            --smoke
 
       - name: Authenticate to GHCR
         if: github.event_name != 'pull_request'
@@ -98,12 +103,21 @@ jobs:
           podman push "$IMAGE:${GITHUB_SHA}-${{ matrix.arch }}"
 
   manifest:
-    # Joins the per-architecture images published above into a single
-    # multi-arch manifest, so `podman pull` picks the right one.
-    name: publish manifest
+    # Joins the per-architecture images published above into one multi-arch
+    # manifest per flavour, so `podman pull` picks the right one.
+    name: publish manifest (${{ matrix.flavor }})
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: toolbx
+            image: developer-platform-dev
+          - flavor: distrobox
+            image: developer-platform-distrobox
 
     permissions:
       contents: read
@@ -118,7 +132,7 @@ jobs:
       - name: Set image name
         run: |
           OWNER="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE=ghcr.io/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${OWNER}/${{ matrix.image }}" >> "$GITHUB_ENV"
 
       - name: Authenticate to GHCR
         env:

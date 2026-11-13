@@ -1,39 +1,52 @@
-FROM registry.fedoraproject.org/fedora-toolbox:44
+# Developer platform image -- builds both supported flavours.
+#
+#   FLAVOR=toolbx      image for `toolbox create --image ...`
+#   FLAVOR=distrobox   image for `distrobox create --image ...`
+#
+# The build context is the containers/ directory, NOT containers/dev, because
+# the package manifests are shared between flavours. Always build through
+# containers/build.sh, which gets the context, platform and build args right:
+#
+#   containers/build.sh --flavor distrobox
+#
+# Both flavours install containers/packages/common.txt plus the list named
+# after the flavour. Nothing here may depend on a Red Hat subscription: the
+# resulting images are published publicly to GHCR.
+
+ARG BASE_IMAGE=registry.fedoraproject.org/fedora-toolbox:44
+FROM ${BASE_IMAGE}
+
+# Which package list to layer on top of common.txt. Checked below so that a
+# typo fails the build instead of silently producing a half-populated image.
+ARG FLAVOR=toolbx
+
+# Supplied by the builder, follows --platform.
+ARG TARGETARCH
+
+# ---------------------------------------------------------------------------
+# Pinned versions for everything installed outside dnf. Bump these here; they
+# are the single source of truth and scripts/validate.sh checks they are set.
+# ---------------------------------------------------------------------------
+ARG KUBECTL_VERSION=v1.37.1
+ARG ARGOCD_VERSION=v3.5.4
+ARG OT_VERSION=v0.16.0
 
 USER root
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# Version should be pinned by the workflow/repository.
-#ARG CLAUDE_CODE_VERSION
-ENV CLAUDE_CODE_VERSION 2.1.306
+COPY packages/ /usr/share/developer-platform/packages/
 
-
-RUN dnf copr enable -y atim/starship \
-    && dnf install -y \
-      android-tools ansible-core awscli2 \
-      ca-certificates cargo cmake curl \
-      fd-find fzf \
-      gcc gcc-c++ \
-      gh git git-lfs golang gzip \
-      jq kind \
-      android-tools ansible-core awscli2 \
-      ca-certificates cargo chezmoi cmake curl \
-      fd-find fzf \
-      gcc gcc-c++ \
-      gh git git-lfs golang gzip \
-      jq just \
-      krb5-workstation \
-      libicu libunwind \
-      make ninja-build \
-      nodejs npm \
-      openssh-clients openssl-libs \
-      opentofu \
-      podman \
-      python3 python3-pip python3-devel \
-      ripgrep \
-      rust rust-std-static \
-      starship \
-      tar \
-      unzip wget yq zstd \
+# Base packages. The two lists are concatenated, stripped of comments and
+# handed to a single dnf transaction so dependency resolution sees everything.
+RUN test -f "/usr/share/developer-platform/packages/${FLAVOR}.txt" \
+      || { echo "unknown FLAVOR: ${FLAVOR}" >&2; exit 1; } \
+    && dnf copr enable -y atim/starship \
+    && mapfile -t packages < <( \
+         sed -e 's/#.*//' -e 's/[[:space:]]//g' \
+             "/usr/share/developer-platform/packages/common.txt" \
+             "/usr/share/developer-platform/packages/${FLAVOR}.txt" \
+         | grep -v '^$' ) \
+    && dnf install -y "${packages[@]}" \
     && dnf clean all
 
 # VS Code repository.
@@ -49,15 +62,10 @@ RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
     && dnf install -y code \
     && dnf clean all
 
-# kubectl from the upstream Kubernetes release channel. Nothing here needs a
-# Red Hat subscription, so the resulting image can be published publicly.
-# TARGETARCH is supplied by the builder and follows --platform.
-ARG TARGETARCH
-ARG KUBECTL_VERSION=v1.37.1
+# kubectl from the upstream Kubernetes release channel.
 ARG KUBECTL_URL=https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl
-RUN \
-    curl -sSL --fail-with-body -o /var/tmp/kubectl ${KUBECTL_URL} \
-    && curl -sSL --fail-with-body -o /var/tmp/kubectl.sha256 ${KUBECTL_URL}.sha256 \
+RUN curl -sSL --fail-with-body -o /var/tmp/kubectl "${KUBECTL_URL}" \
+    && curl -sSL --fail-with-body -o /var/tmp/kubectl.sha256 "${KUBECTL_URL}.sha256" \
     && printf '%s  %s\n' "$(cat /var/tmp/kubectl.sha256)" /var/tmp/kubectl \
        | sha256sum --check - \
     && install -m 0755 /var/tmp/kubectl /usr/local/bin/kubectl \
@@ -65,13 +73,11 @@ RUN \
 
 # argoproj publishes one checksum file per release rather than one per asset,
 # so the matching line is selected by asset name before the check.
-ARG ARGOCD_VERSION=v3.5.4
 ARG ARGOCD_RELEASE=https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}
 ARG ARGOCD_ASSET=argocd-linux-${TARGETARCH}
-RUN \
-    curl -sSL --fail-with-body -o /var/tmp/argocd ${ARGOCD_RELEASE}/${ARGOCD_ASSET} \
+RUN curl -sSL --fail-with-body -o /var/tmp/argocd "${ARGOCD_RELEASE}/${ARGOCD_ASSET}" \
     && curl -sSL --fail-with-body \
-       -o /var/tmp/cli_checksums.txt ${ARGOCD_RELEASE}/cli_checksums.txt \
+       -o /var/tmp/cli_checksums.txt "${ARGOCD_RELEASE}/cli_checksums.txt" \
     && printf '%s  %s\n' \
        "$(awk -v asset="${ARGOCD_ASSET}" '$2 == asset { print $1 }' \
           /var/tmp/cli_checksums.txt)" \
@@ -80,18 +86,31 @@ RUN \
     && install -m 0755 /var/tmp/argocd /usr/local/bin/argocd \
     && rm /var/tmp/argocd /var/tmp/cli_checksums.txt
 
-RUN curl -L -o /usr/local/bin/ot https://github.com/OpenTodoApp/OpenTodo/releases/download/v0.16.0/ot-linux-amd64 \
-    && chmod +x /usr/local/bin/ot
+# OpenTodo. Upstream publishes no checksum file and amd64 binaries only, so
+# this is installed on x86_64 and skipped elsewhere rather than failing the
+# arm64 build.
+ARG OT_RELEASE=https://github.com/OpenTodoApp/OpenTodo/releases/download/${OT_VERSION}
+RUN if [[ "${TARGETARCH}" == "amd64" ]]; then \
+      curl -sSL --fail-with-body -o /var/tmp/ot "${OT_RELEASE}/ot-linux-amd64" \
+      && install -m 0755 /var/tmp/ot /usr/local/bin/ot \
+      && rm /var/tmp/ot; \
+    else \
+      echo "ot: no ${TARGETARCH} build published upstream, skipping"; \
+    fi
 
-# Remove this so we can have Claude installed locally since it updates frequently.
-#This uses the npm distribution. Review Anthropic's current installation
-# guidance when choosing or updating the pinned version.
-#RUN test -n "${CLAUDE_CODE_VERSION}" \
-#    && npm install --global \
-#       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-#    && npm cache clean --force
+# Claude Code is deliberately NOT baked in. It releases far more often than
+# this image, so it is installed into the developer's home directory instead
+# and updates itself there.
 
-COPY --chmod=0644 podman.sh /etc/profile.d/podman.sh
+COPY --chmod=0644 dev/podman.sh /etc/profile.d/podman.sh
 
-# Toolbx performs user setup when the container is created.
+# toolbx refuses an image without this label; distrobox ignores it.
+LABEL com.github.containers.toolbox="true" \
+      org.opencontainers.image.title="developer-platform-${FLAVOR}" \
+      org.opencontainers.image.description="Fedora development environment for ${FLAVOR}" \
+      org.opencontainers.image.source="https://github.com/dsmk/linux-dev-laptop" \
+      org.opencontainers.image.licenses="MIT" \
+      dev.linux-dev-laptop.flavor="${FLAVOR}"
+
+# toolbx and distrobox both perform user setup when the container is created.
 # Do not bake personal authentication into this image.

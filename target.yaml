@@ -78,7 +78,7 @@
         fail_msg: "This playbook is intended for Fedora."
 
   tasks:
-    - name: Basic fedora packages 
+    - name: Basic fedora packages
       ansible.builtin.import_tasks: fedora-rpms.yaml
 
     - name: Flatpak apps
@@ -91,4 +91,3 @@
       tags:
         - go
       ansible.builtin.import_tasks: go-apps.yaml
-

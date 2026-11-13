@@ -1,0 +1,38 @@
+# Extra packages for the 'distrobox' flavour.
+#
+# distrobox relies on a set of host-integration utilities being present inside
+# the container: home/host mounting, `distrobox-export`, X11/Wayland
+# forwarding and the init helpers all shell out to these. See
+# https://distrobox.it/compatibility/#containers-distros for the upstream list.
+# Anything already in common.txt is deliberately left out.
+
+bash-completion
+bc
+diffutils
+findutils
+glibc-langpack-en
+gnupg2
+hostname
+iproute
+iputils
+keyutils
+less
+lsof
+mesa-dri-drivers
+ncurses
+nss-mdns
+pam
+passwd
+pigz
+pinentry
+procps-ng
+rsync
+shadow-utils
+sudo
+time
+tree
+util-linux
+vte-profile
+which
+xorg-x11-xauth
+zip

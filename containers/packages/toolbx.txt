@@ -1,0 +1,7 @@
+# Extra packages for the 'toolbx' flavour.
+#
+# The fedora-toolbox base image already ships the integration pieces toolbx
+# needs (sudo, passwd, shadow-utils, vte-profile, ...), so this list only adds
+# what is specific to running the development workflow under `toolbox enter`.
+
+flatpak-xdg-utils

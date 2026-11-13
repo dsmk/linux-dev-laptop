@@ -126,6 +126,36 @@
               podman_containers.stdout | from_json
               | map(attribute='Names') | flatten | list
             )
+          changed_when: true
+
+        - name: Create development distrobox
+          ansible.builtin.command:
+            argv:
+              - distrobox
+              - create
+              - --yes
+              - --name
+              - "{{ developer_distrobox_container }}"
+              - --image
+              - "{{ developer_distrobox_image }}"
+          when:
+            - enable_distrobox | bool
+            - >-
+              developer_distrobox_container not in
+              (
+                podman_containers.stdout | from_json
+                | map(attribute='Names') | flatten | list
+              )
+          changed_when: true
+
+        - name: Create distrobox shell launcher
+          ansible.builtin.copy:
+            dest: "{{ developer_home }}/.local/bin/dev-distrobox"
+            mode: "0755"
+            content: |
+              #!/bin/sh
+              exec distrobox enter {{ developer_distrobox_container }}
+          when: enable_distrobox | bool
 
         - name: Create VS Code desktop launcher
           ansible.builtin.copy:

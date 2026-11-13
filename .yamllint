@@ -1,0 +1,24 @@
+---
+# Shared yamllint configuration. scripts/validate.sh and
+# .github/workflows/verify.yml both pick this up automatically.
+extends: relaxed
+
+# ansible-lint requires these exact values and warns (disabling its fix mode)
+# when a custom yamllint config disagrees.
+rules:
+  line-length: disable
+  comments:
+    min-spaces-from-content: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+# The legacy mutable-Fedora playbooks at the repository root are task
+# fragments: their contents are indented to match the `import_tasks` site, so
+# the indentation rule does not apply to them. They are still parsed as YAML
+# by scripts/validate.sh. Do not extend this list to cover new files -- fix
+# the file instead.
+ignore: |
+  fedora-rpms.yaml
+  flatpak.yaml
+  go-apps.yaml

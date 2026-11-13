@@ -2,8 +2,15 @@
 developer_user: dsmk
 developer_container: dev
 
-# Set this to the published image digest for repeatable deployments.
+# Set these to published image digests for repeatable deployments.
+# Both images are built from containers/dev/Containerfile; see containers/README.md.
 developer_image: ghcr.io/dsmk/developer-platform-dev:main
+developer_distrobox_image: ghcr.io/dsmk/developer-platform-distrobox:main
+
+# The distrobox container is optional: toolbx is the default on Silverblue,
+# distrobox is what the same image set is used through on other hosts.
+enable_distrobox: false
+developer_distrobox_container: dev-distrobox
 
 enable_personal: false
 enable_pihole: false
@@ -80,6 +87,7 @@ winapps_flavor: manual
 
 # Host package names should be verified against the active Fedora release.
 host_packages:
+  - distrobox
   - freerdp
   - NetworkManager-openconnect
   - NetworkManager-openconnect-gnome
