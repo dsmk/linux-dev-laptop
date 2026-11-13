@@ -52,15 +52,30 @@ RUN if [[ -n "${PROXY_CA_CERT}" ]]; then \
 
 COPY packages.txt /usr/share/developer-platform/packages.txt
 
-RUN dnf copr enable -y atim/starship \
-    && mapfile -t packages < <( \
-         sed -e 's/#.*//' -e 's/[[:space:]]//g' \
-             /usr/share/developer-platform/packages.txt \
-         | grep -v '^$' ) \
-    && dnf install -y "${packages[@]}" \
-    && dnf clean all
-
-# VS Code.
+# One dnf transaction for everything, VS Code included. Splitting it would
+# rewrite the 45 MB rpm database once per layer and leave the earlier copies
+# stranded in the image.
+#
+#   install_weak_deps=False  Recommends are not wanted here: they were
+#       pulling in mesa-vulkan-drivers, mercurial, intel-mediasdk and the
+#       nodejs docs, roughly halving the package count once turned off.
+#       Anything genuinely needed is named in packages.txt instead.
+#   tsflags=nodocs           skips documentation for packages installed here
+#       (the base image's own docs are already in a lower layer and cannot
+#       be reclaimed from this one).
+#
+# Two packages are removed rather than simply not installed, because the
+# fedora-toolbox base ships them:
+#
+#   glibc-all-langpacks   carries a 222 MB locale-archive. Installing
+#       glibc-langpack-en regenerates that archive, so leaving all-langpacks
+#       in place would store it twice -- once in the base layer and once
+#       here. Removing it leaves per-locale directories and no archive.
+#   mesa-vulkan-drivers   174 MB of Vulkan drivers. VS Code renders through
+#       GL, so mesa-dri-drivers is kept and this is not.
+#
+# Removing base-image content shrinks the unpacked image but not the pull:
+# those bytes still sit in the base layer, which this build cannot rewrite.
 RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
     && printf '%s\n' \
        '[code]' \
@@ -70,7 +85,16 @@ RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
        'gpgcheck=1' \
        'gpgkey=https://packages.microsoft.com/keys/microsoft.asc' \
        > /etc/yum.repos.d/vscode.repo \
-    && dnf install -y code \
+    && dnf copr enable -y atim/starship \
+    && mapfile -t packages < <( \
+         sed -e 's/#.*//' -e 's/[[:space:]]//g' \
+             /usr/share/developer-platform/packages.txt \
+         | grep -v '^$' ) \
+    && dnf install -y \
+         --setopt=install_weak_deps=False \
+         --setopt=tsflags=nodocs \
+         "${packages[@]}" code \
+    && dnf remove -y glibc-all-langpacks mesa-vulkan-drivers \
     && dnf clean all
 
 # kubectl from the upstream Kubernetes release channel.

@@ -8,6 +8,17 @@
 # host-integration utilities distrobox shells out to (bc, lsof, rsync,
 # xorg-x11-xauth, ...) alongside the development toolchain. See
 # https://distrobox.it/compatibility/#containers-distros for that list.
+#
+# The image is installed with weak dependencies off, so anything wanted has
+# to be named here -- adding a package no longer drags its Recommends in.
+#
+# Two entries are here for reasons that are not obvious:
+#   podman-docker   kind requires "(docker-cli or podman-docker)". Without
+#                   this dnf picks docker-cli and installs the whole Moby
+#                   stack (moby-engine, containerd, docker-buildx,
+#                   rootlesskit) next to the podman that is already here.
+#   glibc-langpack-en  the base image ships glibc-all-langpacks; the
+#                   Containerfile removes it and keeps this one instead.
 
 android-tools
 ansible-core
@@ -46,7 +57,6 @@ libicu
 libunwind
 lsof
 make
-mesa-dri-drivers
 ncurses
 ninja-build
 nodejs
@@ -60,6 +70,7 @@ passwd
 pigz
 pinentry
 podman
+podman-docker
 procps-ng
 python3
 python3-devel

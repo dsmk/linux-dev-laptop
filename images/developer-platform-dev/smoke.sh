@@ -65,6 +65,60 @@ else
   fail=1
 fi
 
+echo "-- stays slim"
+# These guard the size work. Each one silently cost hundreds of megabytes
+# before, and each would come back without anyone noticing.
+rpm_present() {
+  local package
+  for package in "$@"; do
+    if rpm -q "${package}" >/dev/null 2>&1; then
+      printf '  ok      %s is installed\n' "${package}"
+    else
+      printf '  MISSING package %s\n' "${package}"
+      fail=1
+    fi
+  done
+}
+
+rpm_absent() {
+  local package
+  for package in "$@"; do
+    if rpm -q "${package}" >/dev/null 2>&1; then
+      printf '  PRESENT %s (should not be installed)\n' "${package}"
+      fail=1
+    else
+      printf '  ok      %s is absent\n' "${package}"
+    fi
+  done
+}
+
+# kind requires "(docker-cli or podman-docker)". Satisfied from the podman
+# side, the whole Moby stack stays out. podman-docker ships /usr/bin/docker
+# as a shim rather than a command of its own, so both are checked.
+rpm_present podman-docker
+require docker
+rpm_absent moby-engine containerd docker-cli glibc-all-langpacks \
+  mesa-vulkan-drivers
+
+# mesa-dri-drivers stays: VS Code renders through GL, and llvmpipe is the
+# software fallback.
+rpm_present mesa-dri-drivers
+
+# glibc-all-langpacks carries a 222 MB locale-archive. Removing it in favour
+# of glibc-langpack-en leaves per-locale directories and no archive at all;
+# a large archive here means the removal regressed.
+if [[ -f /usr/lib/locale/locale-archive ]]; then
+  archive_mb=$(( $(stat -c %s /usr/lib/locale/locale-archive) / 1048576 ))
+  if [[ "${archive_mb}" -lt 60 ]]; then
+    printf '  ok      locale-archive is %s MB\n' "${archive_mb}"
+  else
+    printf '  TOO BIG locale-archive is %s MB; expected under 60\n' "${archive_mb}"
+    fail=1
+  fi
+else
+  echo "  ok      no locale-archive (only the en langpack is installed)"
+fi
+
 # Stop here when anything is missing: the version checks below would other-
 # wise fail with a confusing "command not found" instead of the list above.
 if [[ "${fail}" -ne 0 ]]; then
