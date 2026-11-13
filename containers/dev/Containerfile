@@ -1,7 +1,8 @@
-# Developer platform image -- builds both supported flavours.
+# Developer platform image -- builds every flavour in containers/flavours.conf.
 #
-#   FLAVOR=toolbx      image for `toolbox create --image ...`
-#   FLAVOR=distrobox   image for `distrobox create --image ...`
+#   FLAVOR=toolbx      development image for `toolbox create --image ...`
+#   FLAVOR=distrobox   development image for `distrobox create --image ...`
+#   FLAVOR=ticrypt     tiCrypt Connect application image for distrobox
 #
 # The build context is the containers/ directory, NOT containers/dev, because
 # the package manifests are shared between flavours. Always build through
@@ -9,16 +10,23 @@
 #
 #   containers/build.sh --flavor distrobox
 #
-# Both flavours install containers/packages/common.txt plus the list named
-# after the flavour. Nothing here may depend on a Red Hat subscription: the
-# resulting images are published publicly to GHCR.
+# Which package lists a flavour installs, and whether it gets the developer
+# tooling, comes from containers/flavours.conf by way of build.sh. Nothing
+# here may depend on a Red Hat subscription: the resulting images are
+# published publicly to GHCR.
 
 ARG BASE_IMAGE=registry.fedoraproject.org/fedora-toolbox:44
 FROM ${BASE_IMAGE}
 
-# Which package list to layer on top of common.txt. Checked below so that a
-# typo fails the build instead of silently producing a half-populated image.
+# The flavour being built, and the package lists it installs. build.sh reads
+# both from containers/flavours.conf; the defaults here only make a bare
+# `podman build` produce something sensible.
 ARG FLAVOR=toolbx
+ARG PACKAGE_LISTS="common toolbx"
+
+# dev = also install VS Code, kubectl, argocd and ot.
+# app = package lists and the flavour's own payload only.
+ARG IMAGE_KIND=dev
 
 # Supplied by the builder, follows --platform.
 ARG TARGETARCH
@@ -30,6 +38,15 @@ ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.37.1
 ARG ARGOCD_VERSION=v3.5.4
 ARG OT_VERSION=v0.16.0
+
+# tiCrypt Connect, for the ticrypt flavour. Tera Insights publishes no
+# checksum file and does not sign the RPM, so the digest below was taken from
+# the downloaded artefact and is what pins it. Re-record it when bumping the
+# version, and check the download over a trusted connection:
+#   curl -sSLO https://storage.googleapis.com/ticrypt/connect/stable/<v>/tiCryptConnect-<v>.x86_64.rpm
+#   sha256sum tiCryptConnect-<v>.x86_64.rpm
+ARG TICRYPT_VERSION=4.1.4
+ARG TICRYPT_SHA256=63e738f14decef36a7216d1ab09d8ae80080d1f49245736f965a9d5de3940875
 
 # Optional, empty by default: pin dnf to a single Fedora mirror instead of the
 # metalink. Only set this when building behind a network policy that allows
@@ -76,21 +93,30 @@ RUN if [[ -n "${DNF_BASEURL}" ]]; then \
 
 COPY packages/ /usr/share/developer-platform/packages/
 
-# Base packages. The two lists are concatenated, stripped of comments and
-# handed to a single dnf transaction so dependency resolution sees everything.
-RUN test -f "/usr/share/developer-platform/packages/${FLAVOR}.txt" \
-      || { echo "unknown FLAVOR: ${FLAVOR}" >&2; exit 1; } \
-    && dnf copr enable -y atim/starship \
+# Base packages. Every list is concatenated, stripped of comments and handed
+# to a single dnf transaction so dependency resolution sees everything.
+RUN set -- ${PACKAGE_LISTS} \
+    && test "$#" -gt 0 || { echo "PACKAGE_LISTS is empty" >&2; exit 1; } \
+    && files=() \
+    && for list in "$@"; do \
+         f="/usr/share/developer-platform/packages/${list}.txt"; \
+         test -f "$f" || { echo "no such package list: ${list}" >&2; exit 1; }; \
+         files+=("$f"); \
+       done \
+    && if printf '%s\n' "$@" | grep -qx common; then \
+         dnf copr enable -y atim/starship; \
+       fi \
     && mapfile -t packages < <( \
-         sed -e 's/#.*//' -e 's/[[:space:]]//g' \
-             "/usr/share/developer-platform/packages/common.txt" \
-             "/usr/share/developer-platform/packages/${FLAVOR}.txt" \
+         sed -e 's/#.*//' -e 's/[[:space:]]//g' "${files[@]}" \
          | grep -v '^$' ) \
     && dnf install -y "${packages[@]}" \
     && dnf clean all
 
-# VS Code repository.
-RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
+# VS Code repository. Development flavours only.
+RUN if [[ "${IMAGE_KIND}" != "dev" ]]; then \
+      echo "IMAGE_KIND=${IMAGE_KIND}, skipping VS Code"; exit 0; \
+    fi \
+    && rpm --import https://packages.microsoft.com/keys/microsoft.asc \
     && printf '%s\n' \
        '[code]' \
        'name=Visual Studio Code' \
@@ -104,7 +130,10 @@ RUN rpm --import https://packages.microsoft.com/keys/microsoft.asc \
 
 # kubectl from the upstream Kubernetes release channel.
 ARG KUBECTL_URL=https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl
-RUN curl -sSL --fail-with-body -o /var/tmp/kubectl "${KUBECTL_URL}" \
+RUN if [[ "${IMAGE_KIND}" != "dev" ]]; then \
+      echo "IMAGE_KIND=${IMAGE_KIND}, skipping kubectl"; exit 0; \
+    fi \
+    && curl -sSL --fail-with-body -o /var/tmp/kubectl "${KUBECTL_URL}" \
     && curl -sSL --fail-with-body -o /var/tmp/kubectl.sha256 "${KUBECTL_URL}.sha256" \
     && printf '%s  %s\n' "$(cat /var/tmp/kubectl.sha256)" /var/tmp/kubectl \
        | sha256sum --check - \
@@ -115,7 +144,10 @@ RUN curl -sSL --fail-with-body -o /var/tmp/kubectl "${KUBECTL_URL}" \
 # so the matching line is selected by asset name before the check.
 ARG ARGOCD_RELEASE=https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}
 ARG ARGOCD_ASSET=argocd-linux-${TARGETARCH}
-RUN curl -sSL --fail-with-body -o /var/tmp/argocd "${ARGOCD_RELEASE}/${ARGOCD_ASSET}" \
+RUN if [[ "${IMAGE_KIND}" != "dev" ]]; then \
+      echo "IMAGE_KIND=${IMAGE_KIND}, skipping argocd"; exit 0; \
+    fi \
+    && curl -sSL --fail-with-body -o /var/tmp/argocd "${ARGOCD_RELEASE}/${ARGOCD_ASSET}" \
     && curl -sSL --fail-with-body \
        -o /var/tmp/cli_checksums.txt "${ARGOCD_RELEASE}/cli_checksums.txt" \
     && printf '%s  %s\n' \
@@ -130,7 +162,9 @@ RUN curl -sSL --fail-with-body -o /var/tmp/argocd "${ARGOCD_RELEASE}/${ARGOCD_AS
 # this is installed on x86_64 and skipped elsewhere rather than failing the
 # arm64 build.
 ARG OT_RELEASE=https://github.com/OpenTodoApp/OpenTodo/releases/download/${OT_VERSION}
-RUN if [[ "${TARGETARCH}" == "amd64" ]]; then \
+RUN if [[ "${IMAGE_KIND}" != "dev" ]]; then \
+      echo "IMAGE_KIND=${IMAGE_KIND}, skipping ot"; \
+    elif [[ "${TARGETARCH}" == "amd64" ]]; then \
       curl -sSL --fail-with-body -o /var/tmp/ot "${OT_RELEASE}/ot-linux-amd64" \
       && install -m 0755 /var/tmp/ot /usr/local/bin/ot \
       && rm /var/tmp/ot; \
@@ -142,6 +176,31 @@ RUN if [[ "${TARGETARCH}" == "amd64" ]]; then \
 # this image, so it is installed into the developer's home directory instead
 # and updates itself there.
 
+# tiCrypt Connect, for the ticrypt flavour. The RPM ships
+# /usr/share/applications/ticrypt-connect.desktop and hicolor icons, which is
+# what lets `distrobox-export --app ticrypt-connect` put a working launcher on
+# the host menu.
+#
+# Upstream does not sign the RPM, so localpkg_gpgcheck is turned off for this
+# one transaction and the download is pinned by the SHA-256 above instead. The
+# package is x86_64 only, and flavours.conf therefore builds ticrypt for amd64
+# alone, but the guard below keeps a hand-run arm64 build honest.
+ARG TICRYPT_RPM=https://storage.googleapis.com/ticrypt/connect/stable/${TICRYPT_VERSION}/tiCryptConnect-${TICRYPT_VERSION}.x86_64.rpm
+RUN if [[ "${FLAVOR}" != "ticrypt" ]]; then \
+      exit 0; \
+    fi \
+    && if [[ "${TARGETARCH}" != "amd64" ]]; then \
+         echo "tiCrypt Connect publishes no ${TARGETARCH} build" >&2; exit 1; \
+       fi \
+    && curl -sSL --fail-with-body -o /var/tmp/ticrypt.rpm "${TICRYPT_RPM}" \
+    && printf '%s  %s\n' "${TICRYPT_SHA256}" /var/tmp/ticrypt.rpm \
+       | sha256sum --check - \
+    && dnf install -y --setopt=localpkg_gpgcheck=0 /var/tmp/ticrypt.rpm \
+    && dnf clean all \
+    && rm /var/tmp/ticrypt.rpm \
+    && test -x /usr/bin/ticrypt-connect \
+    && test -f /usr/share/applications/ticrypt-connect.desktop
+
 COPY --chmod=0644 dev/podman.sh /etc/profile.d/podman.sh
 
 # toolbx refuses an image without this label; distrobox ignores it.
@@ -150,7 +209,8 @@ LABEL com.github.containers.toolbox="true" \
       org.opencontainers.image.description="Fedora development environment for ${FLAVOR}" \
       org.opencontainers.image.source="https://github.com/dsmk/linux-dev-laptop" \
       org.opencontainers.image.licenses="MIT" \
-      dev.linux-dev-laptop.flavor="${FLAVOR}"
+      dev.linux-dev-laptop.flavor="${FLAVOR}" \
+      dev.linux-dev-laptop.kind="${IMAGE_KIND}"
 
 # toolbx and distrobox both perform user setup when the container is created.
 # Do not bake personal authentication into this image.

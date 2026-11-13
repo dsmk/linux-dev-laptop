@@ -17,7 +17,22 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPO_ROOT
 cd "${REPO_ROOT}" || exit 1
 
-readonly FLAVOURS=(toolbx distrobox)
+readonly FLAVOURS_CONF=containers/flavours.conf
+
+# Read the flavour registry rather than keeping a second copy of it here.
+flavour_names() {
+  awk -F'|' '!/^[[:space:]]*#/ && NF > 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1 }' \
+    "${FLAVOURS_CONF}"
+}
+flavour_lists() {
+  awk -F'|' -v name="$1" '
+    !/^[[:space:]]*#/ && NF > 1 {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+      if ($1 == name) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2 }
+    }' "${FLAVOURS_CONF}"
+}
+
+mapfile -t FLAVOURS < <(flavour_names)
 
 failures=0
 skips=0
@@ -67,10 +82,7 @@ manifest_entries() {
   sed -e 's/#.*//' -e 's/[[:space:]]//g' "$1" | grep -v '^$'
 }
 
-all_manifests=(containers/packages/common.txt)
-for flavour in "${FLAVOURS[@]}"; do
-  all_manifests+=("containers/packages/${flavour}.txt")
-done
+mapfile -t all_manifests < <(printf '%s\n' containers/packages/*.txt | sort)
 
 for manifest in "${all_manifests[@]}"; do
   if [[ ! -f "${manifest}" ]]; then
@@ -109,18 +121,33 @@ for manifest in "${all_manifests[@]}"; do
   fi
 done
 
-# A package in both common.txt and a flavour list would be installed twice and
-# is a sign the lists have drifted.
+# A package named by two of the lists one flavour installs would be handed to
+# dnf twice, and is a sign the lists have drifted.
 for flavour in "${FLAVOURS[@]}"; do
-  manifest="containers/packages/${flavour}.txt"
-  [[ -f "${manifest}" ]] || continue
-  if overlap="$(comm -12 \
-        <(manifest_entries containers/packages/common.txt | LC_ALL=C sort) \
-        <(manifest_entries "${manifest}" | LC_ALL=C sort))" \
+  lists="$(flavour_lists "${flavour}")"
+  if [[ -z "${lists}" ]]; then
+    fail "${flavour} names no package lists in ${FLAVOURS_CONF}"
+    continue
+  fi
+
+  combined=""
+  missing_list=false
+  for list in ${lists}; do
+    manifest="containers/packages/${list}.txt"
+    if [[ ! -f "${manifest}" ]]; then
+      fail "${flavour} names a missing package list: packages/${list}.txt"
+      missing_list=true
+      continue
+    fi
+    combined+="$(manifest_entries "${manifest}")"$'\n'
+  done
+  [[ "${missing_list}" == true ]] && continue
+
+  if overlap="$(printf '%s' "${combined}" | grep -v '^$' | LC_ALL=C sort | uniq -d)" \
      && [[ -n "${overlap}" ]]; then
-    fail "${flavour} repeats packages from common.txt: ${overlap//$'\n'/ }"
+    fail "${flavour} (${lists}) names packages twice: ${overlap//$'\n'/ }"
   else
-    pass "${flavour} does not repeat common.txt"
+    pass "${flavour} lists (${lists}) do not overlap"
   fi
 done
 
@@ -134,7 +161,7 @@ if [[ -f "${CONTAINERFILE}" ]]; then
 
   # Every version installed from outside dnf must be pinned, so a rebuild of
   # an old commit produces the same image.
-  for arg in KUBECTL_VERSION ARGOCD_VERSION OT_VERSION; do
+  for arg in KUBECTL_VERSION ARGOCD_VERSION OT_VERSION TICRYPT_VERSION; do
     if grep -qE "^ARG ${arg}=.+" "${CONTAINERFILE}"; then
       pass "${arg} is pinned"
     else
@@ -146,6 +173,15 @@ if [[ -f "${CONTAINERFILE}" ]]; then
     pass "DNF_BASEURL defaults to empty"
   else
     fail "ARG DNF_BASEURL must default to empty; a pinned mirror changes image contents"
+  fi
+
+  # Upstream publishes no checksum file for tiCrypt Connect, so the pinned
+  # digest in the Containerfile is the only thing tying the build to a known
+  # artefact.
+  if grep -qE '^ARG TICRYPT_SHA256=[0-9a-f]{64}$' "${CONTAINERFILE}"; then
+    pass "TICRYPT_SHA256 is a full sha256"
+  else
+    fail "ARG TICRYPT_SHA256 must pin a 64-character sha256"
   fi
 
   if grep -qE '^ARG PROXY_CA_CERT=$' "${CONTAINERFILE}"; then
@@ -175,7 +211,34 @@ else
   fail "${CONTAINERFILE} is missing"
 fi
 
-# Both flavours must be buildable from this checkout.
+# The CI matrices are generated from flavours.conf; check they are valid JSON
+# and cover exactly the flavours declared there.
+if [[ -x containers/ci-matrix.sh ]]; then
+  for mode in build manifest; do
+    if matrix_json="$(containers/ci-matrix.sh "--${mode}" 2>/dev/null)" \
+       && printf '%s' "${matrix_json}" \
+          | python3 -c 'import sys,json; json.load(sys.stdin)' 2>/dev/null; then
+      pass "ci-matrix.sh --${mode} emits valid JSON"
+    else
+      fail "ci-matrix.sh --${mode} does not emit valid JSON"
+      containers/ci-matrix.sh "--${mode}" || true
+      continue
+    fi
+
+    covered="$(printf '%s' "${matrix_json}" \
+      | python3 -c 'import sys,json; print(" ".join(sorted({e["flavor"] for e in json.load(sys.stdin)["include"]})))')"
+    expected="$(printf '%s\n' "${FLAVOURS[@]}" | LC_ALL=C sort | tr '\n' ' ')"
+    if [[ "${covered} " == "${expected}" ]]; then
+      pass "ci-matrix.sh --${mode} covers every flavour"
+    else
+      fail "ci-matrix.sh --${mode} covers '${covered}', flavours.conf declares '${expected% }'"
+    fi
+  done
+else
+  fail "containers/ci-matrix.sh is missing or not executable"
+fi
+
+# Every flavour must be buildable from this checkout.
 if [[ -x containers/build.sh ]]; then
   for flavour in "${FLAVOURS[@]}"; do
     if containers/build.sh --flavor "${flavour}" --dry-run >/dev/null 2>&1; then

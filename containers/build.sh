@@ -20,33 +20,37 @@ readonly REPO_ROOT
 readonly CONTEXT="${REPO_ROOT}/containers"
 readonly CONTAINERFILE="${CONTEXT}/dev/Containerfile"
 
-# Default base image per flavour. Override with --base or BASE_IMAGE= when the
-# network policy in use cannot reach registry.fedoraproject.org; see
-# containers/README.md for the host list.
-base_for_flavor() {
-  case "$1" in
-    toolbx)    echo "registry.fedoraproject.org/fedora-toolbox:44" ;;
-    distrobox) echo "registry.fedoraproject.org/fedora-toolbox:44" ;;
-    *)         return 1 ;;
-  esac
+readonly FLAVOURS_CONF="${CONTEXT}/flavours.conf"
+
+# containers/flavours.conf is the single source of truth for what a flavour
+# is. Fields: name | package lists | published image | architectures | kind.
+flavour_field() {
+  local name="$1" field="$2"
+  awk -F'|' -v name="${name}" -v field="${field}" '
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1) }
+    $1 == name { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $field); print $field; found = 1; exit }
+    END { exit (found ? 0 : 1) }
+  ' "${FLAVOURS_CONF}"
 }
 
-# Published image name per flavour. 'toolbx' keeps the historical name so
-# existing deployments that pull developer-platform-dev keep working.
-image_for_flavor() {
-  case "$1" in
-    toolbx)    echo "developer-platform-dev" ;;
-    distrobox) echo "developer-platform-distrobox" ;;
-    *)         return 1 ;;
-  esac
+known_flavours() {
+  awk -F'|' '!/^[[:space:]]*#/ && NF > 1 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print $1 }' \
+    "${FLAVOURS_CONF}"
 }
+
+# Base image. Every flavour currently starts from fedora-toolbox: it carries
+# the integration pieces both toolbx and distrobox expect. Override with
+# --base or BASE_IMAGE when a network policy cannot reach that registry.
+readonly DEFAULT_BASE_IMAGE="registry.fedoraproject.org/fedora-toolbox:44"
 
 usage() {
   sed -n '3,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   cat <<'USAGE'
 
 Options:
-  --flavor NAME     toolbx (default) or distrobox
+  --flavor NAME     a flavour from containers/flavours.conf
+                    (toolbx, the default, distrobox or ticrypt)
   --arch ARCH       amd64 | arm64; default is the host architecture
   --tag REF         full image reference to tag; default
                     localhost/<image>:dev
@@ -99,17 +103,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! image="$(image_for_flavor "${flavor}")"; then
-  echo "unknown flavour: ${flavor} (expected toolbx or distrobox)" >&2
+if [[ ! -f "${FLAVOURS_CONF}" ]]; then
+  echo "missing ${FLAVOURS_CONF}" >&2
   exit 2
 fi
 
-if [[ ! -f "${CONTEXT}/packages/${flavor}.txt" ]]; then
-  echo "missing package list: containers/packages/${flavor}.txt" >&2
+if ! package_lists="$(flavour_field "${flavor}" 2)"; then
+  echo "unknown flavour: ${flavor}" >&2
+  echo "known flavours: $(known_flavours | tr '\n' ' ')" >&2
   exit 2
 fi
 
-[[ -n "${base}" ]] || base="$(base_for_flavor "${flavor}")"
+image="$(flavour_field "${flavor}" 3)"
+flavour_arches="$(flavour_field "${flavor}" 4)"
+image_kind="$(flavour_field "${flavor}" 5)"
+
+for list in ${package_lists}; do
+  if [[ ! -f "${CONTEXT}/packages/${list}.txt" ]]; then
+    echo "flavour ${flavor} names a missing package list: packages/${list}.txt" >&2
+    exit 2
+  fi
+done
+
+[[ -n "${base}" ]] || base="${DEFAULT_BASE_IMAGE}"
 
 if [[ -z "${engine}" ]]; then
   for candidate in podman docker; do
@@ -140,6 +156,11 @@ if [[ -z "${arch}" ]]; then
   esac
 fi
 
+if [[ " ${flavour_arches} " != *" ${arch} "* ]]; then
+  echo "flavour ${flavor} is not built for ${arch} (flavours.conf says: ${flavour_arches})" >&2
+  exit 2
+fi
+
 [[ -n "${tag}" ]] || tag="localhost/${image}:dev"
 
 build=(
@@ -147,6 +168,8 @@ build=(
   --platform "linux/${arch}"
   --file "${CONTAINERFILE}"
   --build-arg "FLAVOR=${flavor}"
+  --build-arg "PACKAGE_LISTS=${package_lists}"
+  --build-arg "IMAGE_KIND=${image_kind}"
   --build-arg "BASE_IMAGE=${base}"
   --tag "${tag}"
 )
@@ -185,7 +208,8 @@ fi
 
 build+=("${CONTEXT}")
 
-printf 'flavour : %s\n' "${flavor}"
+printf 'flavour : %s (%s)\n' "${flavor}" "${image_kind}"
+printf 'packages: %s\n' "${package_lists}"
 printf 'base    : %s\n' "${base}"
 printf 'arch    : %s\n' "${arch}"
 printf 'engine  : %s\n' "${engine}"
@@ -218,7 +242,8 @@ if [[ "${smoke}" == true ]]; then
     --platform "linux/${arch}" \
     --volume "${REPO_ROOT}/tests:/tests:ro" \
     "${tag}" \
-    bash /tests/smoke-container.sh "${flavor}"
+    bash /tests/smoke-container.sh "${flavor}" \
+      --lists "${package_lists}" --kind "${image_kind}"
 fi
 
 if [[ "${push}" == true ]]; then

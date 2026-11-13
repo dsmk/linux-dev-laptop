@@ -1,29 +1,67 @@
 # Container images
 
-Two images are built from one `Containerfile`, differing only in which package
-list they layer on top of the shared one:
+Every image is built from one `Containerfile`. What differs per flavour —
+which package lists it installs, what it is published as, which architectures
+it is built for, and whether it carries the developer toolchain — is declared
+in `flavours.conf`, which `build.sh`, `scripts/validate.sh`,
+`tests/smoke-container.sh` and the GitHub workflow all read.
 
-| Flavour     | Published as                                    | Entered with                              |
-| ----------- | ----------------------------------------------- | ----------------------------------------- |
-| `toolbx`    | `ghcr.io/dsmk/developer-platform-dev`           | `toolbox enter --container dev`           |
-| `distrobox` | `ghcr.io/dsmk/developer-platform-distrobox`     | `distrobox enter dev-distrobox`           |
+| Flavour     | Published as                                | Kind | Arch         | Entered with                      |
+| ----------- | ------------------------------------------- | ---- | ------------ | --------------------------------- |
+| `toolbx`    | `ghcr.io/dsmk/developer-platform-dev`       | dev  | amd64, arm64 | `toolbox enter --container dev`   |
+| `distrobox` | `ghcr.io/dsmk/developer-platform-distrobox` | dev  | amd64, arm64 | `distrobox enter dev-distrobox`   |
+| `ticrypt`   | `ghcr.io/dsmk/developer-platform-ticrypt`   | app  | amd64        | `distrobox enter ticrypt`         |
 
-Both are multi-arch (`amd64`, `arm64`) and carry
-`com.github.containers.toolbox=true`, so either one can also be used by the
-other tool if needed.
+A `dev` image carries the full toolchain: `packages/common.txt` plus VS Code,
+kubectl, argocd and ot. An `app` image carries only what its package lists
+name plus its own payload, so the ticrypt image is a fraction of the size of
+the development ones.
+
+All images carry `com.github.containers.toolbox=true`, so either tool can use
+any of them.
+
+## tiCrypt Connect
+
+The `ticrypt` flavour packages the [tiCrypt Connect](https://ticrypt.com/download)
+desktop client. It builds on `packages/distrobox.txt` rather than
+`common.txt`: it is an application container, not a development one.
+
+```bash
+distrobox create --name ticrypt \
+  --image ghcr.io/dsmk/developer-platform-ticrypt:main
+distrobox enter ticrypt -- distrobox-export --app ticrypt-connect
+```
+
+The second command puts "tiCrypt Connect" on the host application menu; it
+works because the RPM installs `/usr/share/applications/ticrypt-connect.desktop`
+and hicolor icons, and the image adds the icon themes and fonts a GTK/WebKit
+application needs to render correctly.
+
+Upstream publishes neither a checksum file nor a signed RPM, so
+`TICRYPT_SHA256` in the Containerfile is the pin: it is a digest taken from
+the downloaded artefact. When bumping `TICRYPT_VERSION`, download the new RPM
+over a trusted connection, record its `sha256sum`, and update both.
+`scripts/validate.sh` checks the digest is present and well formed; it cannot
+check it is the right one.
+
+tiCrypt Connect publishes an x86_64 Linux build only, which is why
+`flavours.conf` lists `amd64` alone for this flavour.
 
 ## Layout
 
 ```
 containers/
+├── flavours.conf            what a flavour is; the single source of truth
 ├── build.sh                 the only supported way to build
+├── ci-matrix.sh             turns flavours.conf into the CI build matrices
 ├── dev/
-│   ├── Containerfile        shared by both flavours, selected by FLAVOR
+│   ├── Containerfile        shared by every flavour, driven by build args
 │   └── podman.sh            /etc/profile.d snippet for the host podman socket
 └── packages/
-    ├── common.txt           installed in every flavour
+    ├── common.txt           the developer toolchain
     ├── toolbx.txt           extra packages for toolbx
-    └── distrobox.txt        extra packages for distrobox
+    ├── distrobox.txt        distrobox host integration
+    └── ticrypt.txt          tiCrypt Connect runtime dependencies
 ```
 
 The build context is `containers/`, not `containers/dev/`, because the package
@@ -40,6 +78,10 @@ containers/build.sh --flavor toolbx --smoke
 containers/build.sh --flavor distrobox --smoke
 ```
 
+```bash
+containers/build.sh --flavor ticrypt --smoke
+```
+
 `--smoke` runs `tests/smoke-container.sh` inside the result, which checks that
 every tool the flavour promises is present and starts. `build.sh --help` lists
 the remaining options (`--arch`, `--tag`, `--base`, `--engine`, `--push`,
@@ -50,7 +92,8 @@ Podman is used when installed, otherwise Docker. CI uses Podman.
 ## Changing what is installed
 
 * A package from Fedora, COPR or the VS Code repository: add it to
-  `packages/common.txt` (both flavours) or to the flavour's own list. Keep each
+  `packages/common.txt` (every development flavour) or to the flavour's own
+  list. Keep each
   list sorted with `LC_ALL=C sort` and do not repeat a name that is already in
   `common.txt`.
 * Anything installed from a URL: add a `RUN` to `dev/Containerfile` with a
@@ -127,10 +170,18 @@ When `registry.fedoraproject.org` is unreachable but Docker Hub is,
 losing the toolbox base layer — use it for experiments, not for anything
 published.
 
+## Adding a flavour
+
+Add a line to `flavours.conf` and a `packages/<name>.txt` to match. The build
+script, the validator, the smoke test and the CI matrices all read that file,
+so nothing else needs editing unless the flavour installs something from a
+URL, which goes in `dev/Containerfile` with a pinned version and a checksum.
+
 ## Publishing
 
-`.github/workflows/dev-image.yml` builds all four combinations
-(2 flavours × 2 architectures) on native runners, smoke tests each one, pushes
-`<image>:<sha>-<arch>`, then assembles and pushes a multi-arch manifest as
-`<image>:<sha>` and `<image>:main`. Pull requests build and test but do not
-push.
+`.github/workflows/dev-image.yml` reads the matrices from `ci-matrix.sh`, so
+it builds whatever `flavours.conf` declares — today five images (two flavours
+on two architectures, plus ticrypt on amd64). Each is built on a native
+runner and smoke tested. On `main` it pushes `<image>:<sha>-<arch>` and then
+assembles and pushes a manifest as `<image>:<sha>` and `<image>:main`. Pull
+requests build and smoke test every image but publish nothing.

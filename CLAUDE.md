@@ -1,17 +1,20 @@
 # linux-dev-laptop
 
 Configuration for a Fedora Silverblue developer laptop. The part that gets
-built and published is a pair of container images — a **toolbx** image and a
-**distrobox** image — holding the development toolchain. Ansible then
-configures the host and creates containers from those images.
+built and published is a set of container images: **toolbx** and
+**distrobox** images holding the development toolchain, and a **ticrypt**
+image packaging the tiCrypt Connect desktop client. Ansible then configures
+the host and creates containers from those images.
 
 ## Repository map
 
 ```
 containers/           the images. Start here for anything image related.
-  build.sh            the only supported way to build either flavour
-  dev/Containerfile   shared by both flavours, selected by the FLAVOR build arg
-  packages/*.txt      what gets installed; common.txt + one list per flavour
+  flavours.conf       what a flavour is; the single source of truth
+  build.sh            the only supported way to build any flavour
+  ci-matrix.sh        turns flavours.conf into the CI build matrices
+  dev/Containerfile   shared by every flavour, driven by build args
+  packages/*.txt      what gets installed; one list per concern
   README.md           flavours, build hosts, how to change what is installed
 tests/
   smoke-container.sh  runs inside a built image; checks every tool is present
@@ -31,18 +34,29 @@ repository root (`site.yaml`, `target.yaml`, `fedora-rpms.yaml`, …) are the
 earlier mutable-Fedora approach and are not wired into the Ansible playbooks;
 leave them alone unless asked.
 
-## The two image flavours
+## The image flavours
 
-| Flavour     | Published as                                | Base                     |
-| ----------- | ------------------------------------------- | ------------------------ |
-| `toolbx`    | `ghcr.io/dsmk/developer-platform-dev`       | `fedora-toolbox:44`      |
-| `distrobox` | `ghcr.io/dsmk/developer-platform-distrobox` | `fedora-toolbox:44`      |
+`containers/flavours.conf` declares them. It is the single source of truth:
+`build.sh`, `scripts/validate.sh`, `tests/smoke-container.sh` and
+`.github/workflows/dev-image.yml` all read it, so **add a flavour there, not
+in four places**.
 
-They share `containers/dev/Containerfile` and
-`containers/packages/common.txt`. The only difference is the extra package
-list: `packages/toolbx.txt` or `packages/distrobox.txt`. **Do not fork the
-Containerfile per flavour** — that is exactly the drift this layout exists to
-prevent.
+| Flavour     | Published as                                | Lists                | Kind | Arch         |
+| ----------- | ------------------------------------------- | -------------------- | ---- | ------------ |
+| `toolbx`    | `ghcr.io/dsmk/developer-platform-dev`       | common + toolbx      | dev  | amd64, arm64 |
+| `distrobox` | `ghcr.io/dsmk/developer-platform-distrobox` | common + distrobox   | dev  | amd64, arm64 |
+| `ticrypt`   | `ghcr.io/dsmk/developer-platform-ticrypt`   | distrobox + ticrypt  | app  | amd64        |
+
+Every flavour shares `containers/dev/Containerfile`, differing only by build
+args. **Do not fork the Containerfile per flavour** — that is exactly the
+drift this layout exists to prevent.
+
+`kind` decides whether the URL-installed developer tools go in:
+
+* `dev` — also installs VS Code, kubectl, argocd and ot.
+* `app` — the package lists and the flavour's own payload only. `ticrypt` is
+  an application container, so it builds on `distrobox.txt` rather than
+  `common.txt` and carries no developer toolchain.
 
 The `toolbx` image deliberately keeps the historical name
 `developer-platform-dev`, because `ansible/group_vars/all.yml` and existing
@@ -51,6 +65,24 @@ laptops already pull it.
 On the host side, `ansible/silverblue.yml` always creates the toolbx container
 and creates the distrobox one only when `enable_distrobox` is true
 (`ansible/group_vars/all.yml`). Both image references live in that same file.
+The ticrypt container is not wired into Ansible; `containers/README.md` has
+the two `distrobox` commands that create it and export its launcher.
+
+### tiCrypt Connect
+
+`ticrypt` packages the client from <https://ticrypt.com/download>. Upstream
+publishes an unsigned x86_64 RPM and **no checksum file**, so
+`TICRYPT_SHA256` in the Containerfile is a digest taken from the downloaded
+artefact and is the only thing pinning the build. When bumping
+`TICRYPT_VERSION`, re-download over a trusted connection, record the new
+`sha256sum`, and update both. `validate.sh` checks the digest is present and
+well formed; it cannot check it is the right one.
+
+The RPM ships `/usr/share/applications/ticrypt-connect.desktop` and hicolor
+icons, which is what makes `distrobox-export --app ticrypt-connect` produce a
+working host launcher. `tests/smoke-container.sh` asserts the binary, the
+desktop entry, the icon and the entry's `Type`/`Exec`/`Icon` lines, because
+an image that lost any of them would export a broken launcher silently.
 
 ## Working here
 
@@ -84,6 +116,10 @@ containers/build.sh --flavor toolbx --smoke
 
 ```bash
 containers/build.sh --flavor distrobox --smoke
+```
+
+```bash
+containers/build.sh --flavor ticrypt --smoke
 ```
 
 ### In a Claude Code cloud (web) session
@@ -167,19 +203,22 @@ smoke test.
 `containers/dev/Containerfile`. The checksum logic downloads the matching
 checksum file, so nothing else needs updating.
 
-**Add a third flavour** → add `containers/packages/<name>.txt`, add the name to
-`FLAVOURS` in `scripts/validate.sh`, to `base_for_flavor` and
-`image_for_flavor` in `containers/build.sh`, to the `case` in
-`tests/smoke-container.sh`, and to both matrices in
-`.github/workflows/dev-image.yml`.
+**Add a flavour** → add a line to `containers/flavours.conf` and a matching
+`containers/packages/<name>.txt`. Everything else reads that file, so nothing
+else needs editing unless the flavour installs something from a URL, which
+goes in `containers/dev/Containerfile` with a pinned `ARG <TOOL>_VERSION` and
+a checksum, plus a check in `tests/smoke-container.sh`.
 
 ## CI
 
 * `.github/workflows/verify.yml` — runs `scripts/validate.sh` on every push
   and pull request.
-* `.github/workflows/dev-image.yml` — builds 2 flavours × 2 architectures on
-  native runners, smoke tests each, and on `main` publishes per-arch tags plus
-  a multi-arch manifest. Pull requests build and test but publish nothing.
+* `.github/workflows/dev-image.yml` — a `matrix` job runs
+  `containers/ci-matrix.sh`, so the workflow builds whatever `flavours.conf`
+  declares without listing the flavours itself. Each image is built on a
+  native runner and smoke tested; on `main` it publishes per-arch tags plus a
+  multi-arch manifest per flavour. Pull requests build and smoke test
+  everything and publish nothing.
 
 ## Git
 
