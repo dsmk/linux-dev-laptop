@@ -154,6 +154,18 @@ environment's settings (title bar → environment menu → Edit):
   amd64 and skips it elsewhere, and its smoke test skips it on non-x86_64.
 * **A new tool in an image needs a new check** in that image's `smoke.sh`.
   An image that silently lost a binary should fail CI.
+* **The compiled-language toolchain stays in `developer-platform-dev`.**
+  Moving Go, Rust and the C toolchain into a separate devcontainer image was
+  measured and rejected. Three findings make it less attractive than the
+  package sizes suggest, and they are easy to rediscover the hard way:
+  `golang-bin` hard-requires `gcc`, so the C toolchain only leaves if **both**
+  languages do; `rust` hard-requires `rust-std-static`, so there is no partial
+  Rust saving (it is 291 MB all-or-nothing, not 174 MB); and removing `gcc`
+  breaks `pip install` of C extensions and `npm install` of native modules in
+  the dev container, silently, at the point of use. The whole split frees
+  763 MB of a 4.47 GB image. Do not propose it again without a new reason —
+  wanting per-project toolchain versions for devcontainers would be one;
+  image size on its own is not.
 
 ## Common tasks
 
