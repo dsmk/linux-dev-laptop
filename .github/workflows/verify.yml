@@ -1,0 +1,48 @@
+---
+name: Verify configuration
+
+# Everything that can be checked without building an image. Moved here from
+# the repository root (wf-verify.yml), where GitHub never ran it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation tools
+        run: |
+          python -m pip install \
+            ansible-core ansible-lint yamllint
+
+          ansible-galaxy collection install \
+            -r ansible/requirements.yml
+
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      # scripts/validate.sh is the single entry point: shell syntax,
+      # shellcheck, package manifest consistency, Containerfile pinning,
+      # YAML/JSON parsing, Ansible syntax and ansible-lint. Run the same
+      # command locally before pushing.
+      - name: Validate
+        run: scripts/validate.sh

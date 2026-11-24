@@ -1,0 +1,96 @@
+# Packages for the developer-platform-dev image.
+#
+# One package name per line; blank lines and '#' comments are ignored. Keep it
+# sorted with LC_ALL=C and free of duplicates -- scripts/validate.sh enforces
+# both.
+#
+# This image is used through both toolbx and distrobox, so it carries the
+# host-integration utilities distrobox shells out to (bc, lsof, rsync,
+# xorg-x11-xauth, ...) alongside the development toolchain. See
+# https://distrobox.it/compatibility/#containers-distros for that list.
+#
+# The image is installed with weak dependencies off, so anything wanted has
+# to be named here -- adding a package no longer drags its Recommends in.
+#
+# Two entries are here for reasons that are not obvious:
+#   podman-docker   kind requires "(docker-cli or podman-docker)". Without
+#                   this dnf picks docker-cli and installs the whole Moby
+#                   stack (moby-engine, containerd, docker-buildx,
+#                   rootlesskit) next to the podman that is already here.
+#   glibc-langpack-en  the base image ships glibc-all-langpacks; the
+#                   Containerfile removes it and keeps this one instead.
+
+android-tools
+ansible-core
+awscli2
+bash-completion
+bc
+ca-certificates
+cargo
+chezmoi
+cmake
+curl
+diffutils
+fd-find
+findutils
+flatpak-xdg-utils
+fzf
+gcc
+gcc-c++
+gh
+git
+git-lfs
+glibc-langpack-en
+gnupg2
+golang
+gzip
+hostname
+iproute
+iputils
+jq
+just
+keyutils
+kind
+krb5-workstation
+less
+libicu
+libunwind
+lsof
+make
+ncurses
+ninja-build
+nodejs
+npm
+nss-mdns
+openssh-clients
+openssl-libs
+opentofu
+pam
+passwd
+pigz
+pinentry
+podman
+podman-docker
+procps-ng
+python3
+python3-devel
+python3-pip
+ripgrep
+rsync
+rust
+rust-std-static
+shadow-utils
+starship
+sudo
+tar
+time
+tree
+unzip
+util-linux
+vte-profile
+wget
+which
+xorg-x11-xauth
+yq
+zip
+zstd

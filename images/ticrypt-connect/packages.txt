@@ -1,0 +1,46 @@
+# Packages for the ticrypt-connect image.
+#
+# One package name per line; blank lines and '#' comments are ignored. Keep it
+# sorted with LC_ALL=C and free of duplicates -- scripts/validate.sh enforces
+# both.
+#
+# This image exists to run one application, so the list is deliberately
+# short. It is the minimum distrobox needs inside a container
+# (https://distrobox.it/compatibility/#containers-distros) plus what a GTK +
+# WebKit desktop application needs to start and look right once
+# distrobox-export puts it on the host menu.
+#
+# tiCrypt Connect's own RPM requires cryptsetup-libs, gtk3 and webkit2gtk4.1;
+# they are named here so the smoke test and this list stay honest about what
+# the image contains.
+
+abattis-cantarell-fonts
+adwaita-icon-theme
+bc
+cryptsetup-libs
+curl
+dbus-x11
+dejavu-sans-fonts
+diffutils
+findutils
+gnupg2
+gtk3
+hicolor-icon-theme
+hostname
+less
+libsecret
+lsof
+mesa-dri-drivers
+ncurses
+passwd
+pinentry
+procps-ng
+shadow-utils
+sudo
+time
+util-linux
+webkit2gtk4.1
+wget
+which
+xdg-utils
+xorg-x11-xauth

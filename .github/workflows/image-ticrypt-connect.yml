@@ -1,0 +1,84 @@
+---
+name: ticrypt-connect
+
+# Builds images/ticrypt-connect and publishes it to
+# ghcr.io/<owner>/ticrypt-connect.
+#
+# A pull request builds and smoke tests the image and publishes nothing. A
+# push to main additionally publishes it as :<sha> and :main.
+#
+# amd64 only: tiCrypt Connect publishes no arm64 Linux build, so there is one
+# architecture and therefore no manifest to assemble.
+
+on:
+  pull_request:
+    paths:
+      - images/ticrypt-connect/**
+      - scripts/build-image.sh
+      - .github/workflows/image-ticrypt-connect.yml
+  push:
+    branches: [main]
+    paths:
+      - images/ticrypt-connect/**
+      - scripts/build-image.sh
+      - .github/workflows/image-ticrypt-connect.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ticrypt-connect-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ticrypt-connect
+
+jobs:
+  build:
+    name: build (amd64)
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Set image name
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_ENV"
+
+      # build-image.sh checks the toolbx label on the result and then runs
+      # the image's own smoke.sh inside it.
+      - name: Build and smoke test
+        run: |
+          scripts/build-image.sh "$IMAGE_NAME" \
+            --engine podman \
+            --arch amd64 \
+            --tag "$IMAGE:${GITHUB_SHA}" \
+            --smoke
+
+      - name: Authenticate to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GH_TOKEN" |
+            podman login ghcr.io \
+              --username "$GITHUB_ACTOR" \
+              --password-stdin
+
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        run: |
+          podman push "$IMAGE:${GITHUB_SHA}"
+          podman tag "$IMAGE:${GITHUB_SHA}" "$IMAGE:main"
+          podman push "$IMAGE:main"

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(scripts/validate.sh:*)",
+      "Bash(./scripts/validate.sh:*)",
+      "Bash(scripts/dev-env-setup.sh:*)",
+      "Bash(./scripts/dev-env-setup.sh:*)",
+      "Bash(containers/build.sh:*)",
+      "Bash(./containers/build.sh:*)",
+      "Bash(bash tests/smoke-container.sh:*)",
+      "Bash(bash -n:*)",
+      "Bash(shellcheck:*)",
+      "Bash(yamllint:*)",
+      "Bash(ansible-lint:*)",
+      "Bash(ansible-playbook:*)",
+      "Bash(ansible-galaxy:*)",
+      "Bash(podman build:*)",
+      "Bash(podman run:*)",
+      "Bash(podman images:*)",
+      "Bash(podman image:*)",
+      "Bash(podman inspect:*)",
+      "Bash(podman manifest:*)",
+      "Bash(podman info:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(docker images:*)",
+      "Bash(docker image:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker info:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git ls-files:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(comm:*)",
+      "Bash(diff:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(jq:*)",
+      "Bash(sed -n:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/scripts/dev-env-setup.sh\" --hook",
+            "timeout": 120,
+            "statusMessage": "Checking container engine and build hosts"
+          }
+        ]
+      }
+    ]
+  }
+}
